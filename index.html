@@ -1720,9 +1720,18 @@ async function getOcrWorker() {
   // relatívne cesty rozriešia voči súboru workera, nie voči index.html.
   // Pre spoľahlivosť (a aby SW cache match-oval) použijeme absolútne URL.
   const tessBase = new URL('lib/tesseract/', window.location.href).href;
+  // corePath MUSÍ smerovať na KONKRÉTNY súbor (nie priečinok). Ak dáme priečinok,
+  // Tesseract.js v5 si pri OEM=1 (LSTM) pýta odľahčený "-lstm" core variant
+  // (tesseract-core-simd-lstm.wasm.js), ktorý lokálne nemáme → importScripts 404.
+  // SIMD detekcia: moderné telefóny → rýchly simd core, staršie → plný fallback.
+  let _simdOK = false;
+  try {
+    _simdOK = WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11]));
+  } catch(e) { _simdOK = false; }
+  const _coreFile = _simdOK ? 'tesseract-core-simd.wasm.js' : 'tesseract-core.wasm.js';
   _ocrWorker = await Tesseract.createWorker('eng', 1, {
     workerPath: tessBase + 'worker.min.js',
-    corePath: tessBase,
+    corePath: tessBase + _coreFile,
     langPath: tessBase + 'lang/',
     workerBlobURL: false,
     logger: m => {

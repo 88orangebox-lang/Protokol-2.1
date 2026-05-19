@@ -6,9 +6,10 @@ desktop.ini
 .Spotlight-V100
 .Trashes
 
-# Editory / IDE
+# Editory / IDE / nástroje
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
