@@ -1,0 +1,21 @@
+# OS súbory
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.DS_Store
+.Spotlight-V100
+.Trashes
+
+# Editory / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dočasné / log
+*.log
+*.tmp
+
+# Zálohy protokolov (lokálne JSON exporty z appky - nepatria do repa)
+mpkomfort_zaloha_*.json
