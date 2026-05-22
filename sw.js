@@ -1,7 +1,7 @@
 // ===== MP Komfort - Protokol PWA - Service Worker =====
 // Po každej zmene cache zoznamu alebo logiky bumpni CACHE_VERSION.
 // Pri ďalšom otvorení appky sa stará cache automaticky vymaže a načíta nová verzia.
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v6';
 const CACHE_NAME = 'mp-protokol-' + CACHE_VERSION;
 
 // Jadro aplikácie — bez týchto súborov appka nefunguje.

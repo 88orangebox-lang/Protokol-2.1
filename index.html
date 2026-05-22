@@ -414,6 +414,14 @@ input[readonly], input:disabled, select:disabled {
   .ocr-controls { text-align: center; margin-top: 12px; }
   .ocr-progress-bar { width: 100%; height: 6px; background: var(--bg-group); border-radius: 3px; overflow: hidden; margin-top: 8px; }
   .ocr-progress-bar-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s; }
+  /* Blesk + OCR náhľad */
+  .scanner-toolbar { display: flex; justify-content: center; margin-top: 10px; }
+  .scanner-torch-btn { background: var(--bg-button); color: var(--text-button); border: 1.5px solid var(--border-group); border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; cursor: pointer; font-family: Arial, sans-serif; transition: all 0.15s; }
+  .scanner-torch-btn:hover { border-color: var(--accent); }
+  .scanner-torch-btn.torch-on { background: #f59e0b; color: #1a1a1a; border-color: #f59e0b; }
+  #ocr-review { width: 100%; background: #000; border-radius: 6px; overflow: hidden; }
+  .ocr-review-canvas { width: 100%; height: auto; display: block; }
+  #ocr-review-controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
   /* SN INPUT + SCAN BUTTON */
   .sn-row { display: flex; gap: 6px; align-items: stretch; }
@@ -581,8 +589,20 @@ input[readonly], input:disabled, select:disabled {
       <div class="scanner-target-info" id="scanner-target-info"></div>
       <div class="scanner-status" id="scanner-status">Spúšťam kameru...</div>
       <div id="scanner-reader"></div>
+      <div id="ocr-review" style="display:none;">
+        <canvas id="ocr-review-canvas" class="ocr-review-canvas"></canvas>
+      </div>
+      <div class="scanner-toolbar">
+        <button class="scanner-torch-btn" id="scanner-torch-btn" onclick="toggleTorch()" style="display:none;">🔦 Blesk</button>
+      </div>
       <div class="ocr-controls" id="scanner-ocr-controls" style="display:none;">
-        <button class="btn btn-primary" id="ocr-snap-btn" onclick="ocrSnap()">📸 Odfotiť a prečítať</button>
+        <div id="ocr-live-controls">
+          <button class="btn btn-primary" id="ocr-snap-btn" onclick="ocrSnap()">📸 Odfotiť</button>
+        </div>
+        <div id="ocr-review-controls" style="display:none;">
+          <button class="btn btn-secondary" id="ocr-retake-btn" onclick="ocrRetake()">↻ Odfotiť znova</button>
+          <button class="btn btn-success" id="ocr-use-btn" onclick="ocrConfirm()">✓ Použiť a rozpoznať</button>
+        </div>
         <div id="ocr-progress" style="margin-top:10px; display:none;">
           <div style="font-size:12px; color:var(--text-secondary);" id="ocr-progress-text">Pripravujem OCR...</div>
           <div class="ocr-progress-bar"><div class="ocr-progress-bar-fill" id="ocr-progress-fill"></div></div>
@@ -1572,6 +1592,9 @@ function showToast(msg, type='') {
 let _scannerInstance = null;
 let _scannerTargetId = null;
 let _scannerMode = 'barcode'; // 'barcode' | 'ocr'
+let _scannerTrack = null;     // aktívny video MediaStreamTrack (ostrenie / blesk)
+let _torchOn = false;         // svieti blesk?
+let _ocrCapturedCanvas = null;// zachytená OCR fotka čakajúca na potvrdenie
 
 function openScanner(targetInputId) {
   if (typeof Html5Qrcode === 'undefined' || window.__scannerLibFailed) {
@@ -1580,12 +1603,14 @@ function openScanner(targetInputId) {
   }
   _scannerTargetId = targetInputId;
   _scannerMode = 'barcode';
+  _torchOn = false;
+  _ocrCapturedCanvas = null;
 
   // Reset UI do barcode režimu
   document.getElementById('scanner-tab-barcode').classList.add('active');
   document.getElementById('scanner-tab-ocr').classList.remove('active');
   document.getElementById('scanner-ocr-controls').style.display = 'none';
-  document.getElementById('ocr-progress').style.display = 'none';
+  resetOcrReviewUI();
 
   // Info o cieľovom políčku
   const targetEl = document.getElementById(targetInputId);
@@ -1597,13 +1622,16 @@ function openScanner(targetInputId) {
     '→ ' + groupTitle + ' · ' + (isOu ? 'vonkajšia jednotka' : 'vnútorná jednotka') + ' · ' + labelText;
 
   document.getElementById('scanner-modal').classList.add('open');
-  startBarcodeScan();
+  startScannerCamera();
 }
 
 function closeScanner() {
+  torchOff(); // blesk zhasnúť pred zastavením kamery
   stopScanner().finally(() => {
     document.getElementById('scanner-modal').classList.remove('open');
     _scannerTargetId = null;
+    _scannerTrack = null;
+    _ocrCapturedCanvas = null;
     // OCR worker uvolnime, aby nezostal v pamäti
     if (_ocrWorker) {
       const w = _ocrWorker;
@@ -1620,13 +1648,11 @@ function setScannerMode(mode) {
   document.getElementById('scanner-tab-barcode').classList.toggle('active', mode === 'barcode');
   document.getElementById('scanner-tab-ocr').classList.toggle('active', mode === 'ocr');
   document.getElementById('scanner-ocr-controls').style.display = (mode === 'ocr') ? '' : 'none';
-  document.getElementById('ocr-progress').style.display = 'none';
+  resetOcrReviewUI();
 
   // Reštart kamery v novom režime
-  stopScanner().finally(() => {
-    if (mode === 'barcode') startBarcodeScan();
-    else startCameraForOcr();
-  });
+  torchOff();
+  stopScanner().finally(() => startScannerCamera());
 }
 
 function setScannerStatus(msg, cls='') {
@@ -1636,49 +1662,83 @@ function setScannerStatus(msg, cls='') {
   el.className = 'scanner-status' + (cls ? ' ' + cls : '');
 }
 
-function startBarcodeScan() {
-  setScannerStatus('Namier kamerou na čiarový alebo QR kód...');
+// Responzívne skenovacie okno — široké pre dlhé 1D kódy aj QR
+function scannerQrbox(viewW, viewH) {
+  const w = Math.max(120, Math.floor(viewW * 0.92));
+  let h = Math.floor(viewH * (_scannerMode === 'ocr' ? 0.34 : 0.55));
+  h = Math.max(70, Math.min(h, viewH - 20));
+  return { width: w, height: h };
+}
+
+// Jednotný štart kamery pre oba režimy — zadná kamera, vysoké rozlíšenie, plynulé ostrenie
+function startScannerCamera() {
+  setScannerStatus(_scannerMode === 'ocr'
+    ? 'Namier na štítok a stlač „Odfotiť"'
+    : 'Namier kamerou na čiarový alebo QR kód...');
   _scannerInstance = new Html5Qrcode('scanner-reader');
-  const config = { fps: 10, qrbox: { width: 260, height: 150 } };
+  const config = { fps: 10, qrbox: scannerQrbox };
+  const onDecoded = (txt) => { if (_scannerMode === 'barcode') onScanSuccess(txt); };
+  // width/height/advanced sú best-effort — nikdy nehodia OverconstrainedError.
+  const hiRes = { width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] };
+
   _scannerInstance.start(
-    { facingMode: { exact: 'environment' } },
-    config,
-    (decodedText) => onScanSuccess(decodedText),
-    () => { /* per-frame fail — ignoruj */ }
-  ).catch(() => {
-    // Fallback ak presné 'environment' zlyhá (napr. iPad bez zadnej kamery)
+    Object.assign({ facingMode: { exact: 'environment' } }, hiRes),
+    config, onDecoded, () => { /* per-frame fail — ignoruj */ }
+  ).then(afterCameraStart).catch(() => {
+    // Fallback: zadná kamera "ideal" (zariadenia bez striktnej zadnej kamery)
     _scannerInstance.start(
-      { facingMode: 'environment' },
-      config,
-      (decodedText) => onScanSuccess(decodedText),
-      () => {}
-    ).catch(err => {
+      Object.assign({ facingMode: 'environment' }, hiRes),
+      config, onDecoded, () => {}
+    ).then(afterCameraStart).catch(err => {
       setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
     });
   });
 }
 
-function startCameraForOcr() {
-  // V OCR režime tiež použijeme html5-qrcode kameru, dekódovanie ignorujeme.
-  // Užší qrbox v podobe pruhu — vizuálna pomôcka kam namieriť štítok.
-  setScannerStatus('Namier na štítok a stlač "Odfotiť a prečítať"');
-  _scannerInstance = new Html5Qrcode('scanner-reader');
-  const config = { fps: 5, qrbox: { width: 300, height: 80 } };
-  _scannerInstance.start(
-    { facingMode: { exact: 'environment' } },
-    config,
-    () => { /* barcode v OCR režime ignorujeme */ },
-    () => {}
-  ).catch(() => {
-    _scannerInstance.start(
-      { facingMode: 'environment' },
-      config,
-      () => {},
-      () => {}
-    ).catch(err => {
-      setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
-    });
-  });
+// Po štarte kamery: získať video track, vynútiť plynulé ostrenie, zistiť podporu blesku
+function afterCameraStart() {
+  setTimeout(() => {
+    try {
+      const video = document.querySelector('#scanner-reader video');
+      const stream = video && video.srcObject;
+      const track = stream && stream.getVideoTracks && stream.getVideoTracks()[0];
+      const torchBtn = document.getElementById('scanner-torch-btn');
+      if (!track) { if (torchBtn) torchBtn.style.display = 'none'; return; }
+      _scannerTrack = track;
+      const caps = (track.getCapabilities && track.getCapabilities()) || {};
+      // Explicitné plynulé ostrenie (best-effort, niektoré telefóny ho nevedia)
+      if (caps.focusMode && caps.focusMode.indexOf && caps.focusMode.indexOf('continuous') !== -1) {
+        track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+      }
+      // Blesk: tlačidlo zobrazíme len ak telefón torch podporuje
+      if (torchBtn) {
+        if (caps.torch === true) { torchBtn.style.display = ''; _torchOn = false; updateTorchBtn(); }
+        else { torchBtn.style.display = 'none'; }
+      }
+    } catch(e) { /* hardvér nemusí podporovať — pokoj, ostatné funguje */ }
+  }, 500);
+}
+
+// ===== BLESK / TORCH =====
+function toggleTorch() {
+  if (!_scannerTrack) { showToast('Kamera ešte nie je pripravená', 'error'); return; }
+  const want = !_torchOn;
+  _scannerTrack.applyConstraints({ advanced: [{ torch: want }] })
+    .then(() => { _torchOn = want; updateTorchBtn(); })
+    .catch(() => { _torchOn = false; updateTorchBtn(); showToast('Blesk sa nepodarilo prepnúť', 'error'); });
+}
+function torchOff() {
+  if (_scannerTrack && _torchOn) {
+    try { _scannerTrack.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); } catch(e) {}
+  }
+  _torchOn = false;
+  updateTorchBtn();
+}
+function updateTorchBtn() {
+  const b = document.getElementById('scanner-torch-btn');
+  if (!b) return;
+  b.textContent = _torchOn ? '🔦 Zhasnúť' : '🔦 Blesk';
+  b.classList.toggle('torch-on', _torchOn);
 }
 
 function stopScanner() {
@@ -1775,27 +1835,69 @@ function setOcrProgress(pct, text) {
   if (txt && text) txt.textContent = text;
 }
 
-async function ocrSnap() {
-  const btn = document.getElementById('ocr-snap-btn');
-  if (btn) btn.disabled = true;
+// --- OCR flow: odfotiť → náhľad → potvrdiť / odfotiť znova ---
+
+// Vráti UI do "živého" stavu (kamera beží, čaká sa na odfotenie)
+function resetOcrReviewUI() {
+  _ocrCapturedCanvas = null;
+  const set = (id, disp) => { const e = document.getElementById(id); if (e) e.style.display = disp; };
+  set('ocr-review', 'none');
+  set('ocr-review-controls', 'none');
+  set('scanner-reader', '');
+  set('ocr-live-controls', '');
+  set('ocr-progress', 'none');
+  const snap = document.getElementById('ocr-snap-btn'); if (snap) snap.disabled = false;
+  const useB = document.getElementById('ocr-use-btn'); if (useB) useB.disabled = false;
+  const reB = document.getElementById('ocr-retake-btn'); if (reB) reB.disabled = false;
+}
+
+// 1) Odfotiť — zachytí snímku a ukáže náhľad, aby user posúdil ostrosť
+function ocrSnap() {
+  const canvas = captureVideoFrame();
+  if (!canvas) {
+    setScannerStatus('Kamera ešte nie je pripravená, skús o chvíľu', 'error');
+    return;
+  }
+  _ocrCapturedCanvas = canvas;
+  const rc = document.getElementById('ocr-review-canvas');
+  rc.width = canvas.width;
+  rc.height = canvas.height;
+  rc.getContext('2d').drawImage(canvas, 0, 0);
+  document.getElementById('scanner-reader').style.display = 'none';
+  document.getElementById('ocr-live-controls').style.display = 'none';
+  document.getElementById('ocr-review').style.display = '';
+  document.getElementById('ocr-review-controls').style.display = '';
+  document.getElementById('ocr-progress').style.display = 'none';
+  setScannerStatus('Je text na fotke ostrý a čitateľný? Ak nie, odfoť znova.');
+}
+
+// 2a) Odfotiť znova — zahodí náhľad, späť na živú kameru
+function ocrRetake() {
+  resetOcrReviewUI();
+  setScannerStatus('Namier na štítok a stlač „Odfotiť"');
+}
+
+// 2b) Použiť — pošle potvrdenú fotku do Tesseractu
+async function ocrConfirm() {
+  if (!_ocrCapturedCanvas) return;
+  const useBtn = document.getElementById('ocr-use-btn');
+  const retakeBtn = document.getElementById('ocr-retake-btn');
+  if (useBtn) useBtn.disabled = true;
+  if (retakeBtn) retakeBtn.disabled = true;
   document.getElementById('ocr-progress').style.display = '';
+  setScannerStatus('Spracúvam fotku...');
 
   try {
-    const canvas = captureVideoFrame();
-    if (!canvas) {
-      setScannerStatus('Kamera ešte nie je pripravená, skús o chvíľu znova', 'error');
-      if (btn) btn.disabled = false;
-      return;
-    }
-
     const worker = await getOcrWorker();
-    const result = await worker.recognize(canvas);
-    // Vyčistíme: zahodíme medzery/nové riadky (sériové čísla zvyčajne nemajú medzery)
+    const result = await worker.recognize(_ocrCapturedCanvas);
+    // Sériové čísla zvyčajne nemajú medzery — zahodíme biele znaky
     const text = (result?.data?.text || '').replace(/\s+/g, '').trim();
 
     if (!text) {
-      setOcrProgress(1, 'Text sa nepodarilo rozpoznať. Skús znova / lepšie osvetlenie.');
-      if (btn) btn.disabled = false;
+      setScannerStatus('Text sa nepodarilo prečítať — skús odfotiť znova, ostrejšie.', 'error');
+      document.getElementById('ocr-progress').style.display = 'none';
+      if (useBtn) useBtn.disabled = false;
+      if (retakeBtn) retakeBtn.disabled = false;
       return;
     }
 
@@ -1805,10 +1907,12 @@ async function ocrSnap() {
       skontrolujPolicko(el);
     }
     setScannerStatus('✅ Rozpoznané: ' + text + '  (môžeš upraviť v políčku)', 'success');
-    setTimeout(closeScanner, 900);
+    setTimeout(closeScanner, 1000);
   } catch(e) {
     setScannerStatus('OCR chyba: ' + (e?.message || e), 'error');
-    if (btn) btn.disabled = false;
+    document.getElementById('ocr-progress').style.display = 'none';
+    if (useBtn) useBtn.disabled = false;
+    if (retakeBtn) retakeBtn.disabled = false;
   }
 }
 // ===== PWA SERVICE WORKER REGISTRÁCIA =====
