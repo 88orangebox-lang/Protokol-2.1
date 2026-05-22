@@ -1664,13 +1664,18 @@ function setScannerStatus(msg, cls='') {
 
 // Responzívne skenovacie okno — široké pre dlhé 1D kódy aj QR
 function scannerQrbox(viewW, viewH) {
-  const w = Math.max(120, Math.floor(viewW * 0.92));
+  let w = Math.max(120, Math.floor(viewW * 0.92));
+  w = Math.min(w, viewW);
   let h = Math.floor(viewH * (_scannerMode === 'ocr' ? 0.34 : 0.55));
   h = Math.max(70, Math.min(h, viewH - 20));
   return { width: w, height: h };
 }
 
-// Jednotný štart kamery pre oba režimy — zadná kamera, vysoké rozlíšenie, plynulé ostrenie
+// Jednotný štart kamery pre oba režimy.
+// DÔLEŽITÉ: html5-qrcode vyžaduje, aby prvý parameter start() bol objekt
+// s PRÁVE 1 kľúčom (facingMode ALEBO deviceId). Rozlíšenie a ostrenie sem
+// NEsmú ísť — doladíme ich až PO štarte cez applyConstraints (afterCameraStart),
+// čo nikdy nezablokuje samotný štart kamery.
 function startScannerCamera() {
   setScannerStatus(_scannerMode === 'ocr'
     ? 'Namier na štítok a stlač „Odfotiť"'
@@ -1678,24 +1683,21 @@ function startScannerCamera() {
   _scannerInstance = new Html5Qrcode('scanner-reader');
   const config = { fps: 10, qrbox: scannerQrbox };
   const onDecoded = (txt) => { if (_scannerMode === 'barcode') onScanSuccess(txt); };
-  // width/height/advanced sú best-effort — nikdy nehodia OverconstrainedError.
-  const hiRes = { width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] };
 
-  _scannerInstance.start(
-    Object.assign({ facingMode: { exact: 'environment' } }, hiRes),
-    config, onDecoded, () => { /* per-frame fail — ignoruj */ }
-  ).then(afterCameraStart).catch(() => {
-    // Fallback: zadná kamera "ideal" (zariadenia bez striktnej zadnej kamery)
-    _scannerInstance.start(
-      Object.assign({ facingMode: 'environment' }, hiRes),
-      config, onDecoded, () => {}
-    ).then(afterCameraStart).catch(err => {
-      setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
+  _scannerInstance.start({ facingMode: { exact: 'environment' } }, config, onDecoded, () => {})
+    .then(afterCameraStart)
+    .catch(() => {
+      // Fallback: zadná kamera bez "exact" (zariadenia bez striktnej zadnej kamery)
+      _scannerInstance.start({ facingMode: 'environment' }, config, onDecoded, () => {})
+        .then(afterCameraStart)
+        .catch(err => {
+          setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
+        });
     });
-  });
 }
 
-// Po štarte kamery: získať video track, vynútiť plynulé ostrenie, zistiť podporu blesku
+// Po štarte kamery: doladiť ostrenie + rozlíšenie cez applyConstraints (best-effort),
+// zistiť podporu blesku. Beží AŽ po štarte — nemôže zlomiť spustenie kamery.
 function afterCameraStart() {
   setTimeout(() => {
     try {
@@ -1706,17 +1708,25 @@ function afterCameraStart() {
       if (!track) { if (torchBtn) torchBtn.style.display = 'none'; return; }
       _scannerTrack = track;
       const caps = (track.getCapabilities && track.getCapabilities()) || {};
-      // Explicitné plynulé ostrenie (best-effort, niektoré telefóny ho nevedia)
+
+      // Doladenie: plynulé ostrenie + čo najvyššie rozlíšenie (best-effort).
+      const tune = { advanced: [] };
       if (caps.focusMode && caps.focusMode.indexOf && caps.focusMode.indexOf('continuous') !== -1) {
-        track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+        tune.advanced.push({ focusMode: 'continuous' });
       }
+      if (caps.width && caps.width.max) tune.width = { ideal: Math.min(1920, caps.width.max) };
+      if (caps.height && caps.height.max) tune.height = { ideal: Math.min(1080, caps.height.max) };
+      if (tune.advanced.length || tune.width || tune.height) {
+        track.applyConstraints(tune).catch(() => {});
+      }
+
       // Blesk: tlačidlo zobrazíme len ak telefón torch podporuje
       if (torchBtn) {
         if (caps.torch === true) { torchBtn.style.display = ''; _torchOn = false; updateTorchBtn(); }
         else { torchBtn.style.display = 'none'; }
       }
     } catch(e) { /* hardvér nemusí podporovať — pokoj, ostatné funguje */ }
-  }, 500);
+  }, 600);
 }
 
 // ===== BLESK / TORCH =====
