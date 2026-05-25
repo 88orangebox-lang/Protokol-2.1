@@ -405,8 +405,10 @@ input[readonly], input:disabled, select:disabled {
   .scanner-tab { flex: 1; padding: 10px 8px; background: transparent; color: var(--text-secondary); border: none; border-bottom: 2px solid transparent; cursor: pointer; font-size: 13px; font-weight: bold; font-family: Arial, sans-serif; transition: all 0.15s; }
   .scanner-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .scanner-tab:hover:not(.active) { background: var(--bg-button); color: var(--text-primary); }
-  #scanner-reader { width: 100%; min-height: 240px; background: #000; border-radius: 6px; overflow: hidden; }
+  #scanner-reader { width: 100%; min-height: 240px; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
   #scanner-reader video { width: 100% !important; height: auto !important; display: block; }
+  .focus-ring { position: absolute; width: 60px; height: 60px; margin: -30px 0 0 -30px; border: 2px solid #fff; border-radius: 50%; pointer-events: none; z-index: 6; box-shadow: 0 0 4px rgba(0,0,0,0.6); animation: focusRingAnim 0.8s ease-out forwards; }
+  @keyframes focusRingAnim { 0% { transform: scale(1.5); opacity: 0; } 25% { opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
   .scanner-status { margin-bottom: 10px; font-size: 12px; color: var(--text-secondary); text-align: center; min-height: 18px; }
   .scanner-status.error { color: #ef4444; }
   .scanner-status.success { color: #10b981; font-weight: bold; }
@@ -419,8 +421,17 @@ input[readonly], input:disabled, select:disabled {
   .scanner-torch-btn { background: var(--bg-button); color: var(--text-button); border: 1.5px solid var(--border-group); border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; cursor: pointer; font-family: Arial, sans-serif; transition: all 0.15s; }
   .scanner-torch-btn:hover { border-color: var(--accent); }
   .scanner-torch-btn.torch-on { background: #f59e0b; color: #1a1a1a; border-color: #f59e0b; }
-  #ocr-review { width: 100%; background: #000; border-radius: 6px; overflow: hidden; }
+  #ocr-review { width: 100%; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
   .ocr-review-canvas { width: 100%; height: auto; display: block; }
+  #ocr-crop-box { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,0.55); box-sizing: border-box; cursor: move; touch-action: none; }
+  .ocr-crop-handle { position: absolute; background: var(--accent); border: 2px solid #fff; box-sizing: border-box; touch-action: none; }
+  .ocr-crop-handle.top, .ocr-crop-handle.bottom { left: 50%; width: 42px; height: 16px; margin-left: -21px; border-radius: 8px; cursor: ns-resize; }
+  .ocr-crop-handle.left, .ocr-crop-handle.right { top: 50%; width: 16px; height: 42px; margin-top: -21px; border-radius: 8px; cursor: ew-resize; }
+  .ocr-crop-handle.top { top: -8px; }
+  .ocr-crop-handle.bottom { bottom: -8px; }
+  .ocr-crop-handle.left { left: -8px; }
+  .ocr-crop-handle.right { right: -8px; }
+  .ocr-crop-hint { font-size: 11px; color: var(--text-secondary); text-align: center; margin-top: 6px; }
   #ocr-review-controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
   /* SN INPUT + SCAN BUTTON */
@@ -591,7 +602,14 @@ input[readonly], input:disabled, select:disabled {
       <div id="scanner-reader"></div>
       <div id="ocr-review" style="display:none;">
         <canvas id="ocr-review-canvas" class="ocr-review-canvas"></canvas>
+        <div id="ocr-crop-box" style="display:none;">
+          <div class="ocr-crop-handle top"></div>
+          <div class="ocr-crop-handle bottom"></div>
+          <div class="ocr-crop-handle left"></div>
+          <div class="ocr-crop-handle right"></div>
+        </div>
       </div>
+      <div class="ocr-crop-hint" id="ocr-crop-hint" style="display:none;">Potiahni okraje rámika – ostane len text vnútri</div>
       <div class="scanner-toolbar">
         <button class="scanner-torch-btn" id="scanner-torch-btn" onclick="toggleTorch()" style="display:none;">🔦 Blesk</button>
       </div>
@@ -1594,7 +1612,10 @@ let _scannerTargetId = null;
 let _scannerMode = 'barcode'; // 'barcode' | 'ocr'
 let _scannerTrack = null;     // aktívny video MediaStreamTrack (ostrenie / blesk)
 let _torchOn = false;         // svieti blesk?
+let _torchUnsupported = false;// zariadenie blesk cez web nepodporuje
 let _ocrCapturedCanvas = null;// zachytená OCR fotka čakajúca na potvrdenie
+let _crop = null;             // orezový rámik {x,y,w,h} v CSS px náhľadu
+let _cropDrag = null;         // stav ťahania orezového rámika
 
 function openScanner(targetInputId) {
   if (typeof Html5Qrcode === 'undefined' || window.__scannerLibFailed) {
@@ -1696,8 +1717,8 @@ function startScannerCamera() {
     });
 }
 
-// Po štarte kamery: doladiť ostrenie + rozlíšenie cez applyConstraints (best-effort),
-// zistiť podporu blesku. Beží AŽ po štarte — nemôže zlomiť spustenie kamery.
+// Po štarte kamery: doladiť ostrenie + rozlíšenie, zobraziť blesk, naviazať
+// ťuknutím-zaostriť. Beží AŽ po štarte — nemôže zlomiť spustenie kamery.
 function afterCameraStart() {
   setTimeout(() => {
     try {
@@ -1720,11 +1741,18 @@ function afterCameraStart() {
         track.applyConstraints(tune).catch(() => {});
       }
 
-      // Blesk: tlačidlo zobrazíme len ak telefón torch podporuje
+      // Blesk: tlačidlo zobrazíme VŽDY (detekcia caps.torch je nespoľahlivá,
+      // niektoré telefóny blesk vedia ale cez API ho nehlásia). Reálnu podporu
+      // overíme až pri prvom ťuknutí v toggleTorch(). Skryjeme len ak sme už
+      // potvrdili že zariadenie blesk nepodporuje.
       if (torchBtn) {
-        if (caps.torch === true) { torchBtn.style.display = ''; _torchOn = false; updateTorchBtn(); }
-        else { torchBtn.style.display = 'none'; }
+        torchBtn.style.display = _torchUnsupported ? 'none' : '';
+        _torchOn = false;
+        updateTorchBtn();
       }
+
+      // Ťuknutím zaostriť
+      setupTapToFocus();
     } catch(e) { /* hardvér nemusí podporovať — pokoj, ostatné funguje */ }
   }, 600);
 }
@@ -1735,7 +1763,15 @@ function toggleTorch() {
   const want = !_torchOn;
   _scannerTrack.applyConstraints({ advanced: [{ torch: want }] })
     .then(() => { _torchOn = want; updateTorchBtn(); })
-    .catch(() => { _torchOn = false; updateTorchBtn(); showToast('Blesk sa nepodarilo prepnúť', 'error'); });
+    .catch(() => {
+      // Zariadenie/prehliadač blesk cez web nepodporuje — skryjeme tlačidlo
+      _torchOn = false;
+      _torchUnsupported = true;
+      updateTorchBtn();
+      const b = document.getElementById('scanner-torch-btn');
+      if (b) b.style.display = 'none';
+      showToast('Toto zariadenie nepodporuje ovládanie blesku cez prehliadač', 'error');
+    });
 }
 function torchOff() {
   if (_scannerTrack && _torchOn) {
@@ -1749,6 +1785,55 @@ function updateTorchBtn() {
   if (!b) return;
   b.textContent = _torchOn ? '🔦 Zhasnúť' : '🔦 Blesk';
   b.classList.toggle('torch-on', _torchOn);
+}
+
+// ===== ŤUKNUTÍM ZAOSTRIŤ =====
+function setupTapToFocus() {
+  const reader = document.getElementById('scanner-reader');
+  if (!reader || reader.dataset.tapFocusBound) return;
+  reader.dataset.tapFocusBound = '1';
+  reader.addEventListener('click', (ev) => {
+    if (!_scannerTrack) return;
+    const rect = reader.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const px = ev.clientX - rect.left;
+    const py = ev.clientY - rect.top;
+    showFocusRing(px, py);
+    triggerFocus(px / rect.width, py / rect.height);
+  });
+}
+function showFocusRing(x, y) {
+  const reader = document.getElementById('scanner-reader');
+  if (!reader) return;
+  const ring = document.createElement('div');
+  ring.className = 'focus-ring';
+  ring.style.left = x + 'px';
+  ring.style.top = y + 'px';
+  reader.appendChild(ring);
+  setTimeout(() => { try { ring.remove(); } catch(e) {} }, 850);
+}
+function triggerFocus(nx, ny) {
+  if (!_scannerTrack) return;
+  const caps = (_scannerTrack.getCapabilities && _scannerTrack.getCapabilities()) || {};
+  const advanced = [];
+  // Bod záujmu — zaostri presne kam si ťukol (ak telefón podporuje)
+  if (caps.pointsOfInterest) advanced.push({ pointsOfInterest: [{ x: nx, y: ny }] });
+  // Re-trigger ostrenia
+  if (caps.focusMode && caps.focusMode.indexOf) {
+    if (caps.focusMode.indexOf('single-shot') !== -1) advanced.push({ focusMode: 'single-shot' });
+    else if (caps.focusMode.indexOf('continuous') !== -1) advanced.push({ focusMode: 'continuous' });
+  }
+  if (!advanced.length) return;
+  _scannerTrack.applyConstraints({ advanced }).then(() => {
+    // Po single-shot vrátime continuous, nech kamera ďalej automaticky ostrí
+    setTimeout(() => {
+      if (!_scannerTrack) return;
+      const c = (_scannerTrack.getCapabilities && _scannerTrack.getCapabilities()) || {};
+      if (c.focusMode && c.focusMode.indexOf && c.focusMode.indexOf('continuous') !== -1) {
+        _scannerTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+      }
+    }, 1600);
+  }).catch(() => {});
 }
 
 function stopScanner() {
@@ -1824,17 +1909,11 @@ async function getOcrWorker() {
 function captureVideoFrame() {
   const video = document.querySelector('#scanner-reader video');
   if (!video || !video.videoWidth) return null;
-  // Vyrežeme stredný horizontálny pruh (kde užívateľ namieril štítok)
-  const fw = video.videoWidth;
-  const fh = video.videoHeight;
-  const cropW = Math.floor(fw * 0.9);
-  const cropH = Math.floor(fh * 0.35);
-  const cropX = Math.floor((fw - cropW) / 2);
-  const cropY = Math.floor((fh - cropH) / 2);
+  // Zachytíme celý záber — používateľ si v náhľade oreže rámčekom čo potrebuje.
   const canvas = document.createElement('canvas');
-  canvas.width = cropW;
-  canvas.height = cropH;
-  canvas.getContext('2d').drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
   return canvas;
 }
 
@@ -1850,9 +1929,13 @@ function setOcrProgress(pct, text) {
 // Vráti UI do "živého" stavu (kamera beží, čaká sa na odfotenie)
 function resetOcrReviewUI() {
   _ocrCapturedCanvas = null;
+  _crop = null;
+  _cropDrag = null;
   const set = (id, disp) => { const e = document.getElementById(id); if (e) e.style.display = disp; };
   set('ocr-review', 'none');
   set('ocr-review-controls', 'none');
+  set('ocr-crop-hint', 'none');
+  set('ocr-crop-box', 'none');
   set('scanner-reader', '');
   set('ocr-live-controls', '');
   set('ocr-progress', 'none');
@@ -1861,7 +1944,7 @@ function resetOcrReviewUI() {
   const reB = document.getElementById('ocr-retake-btn'); if (reB) reB.disabled = false;
 }
 
-// 1) Odfotiť — zachytí snímku a ukáže náhľad, aby user posúdil ostrosť
+// 1) Odfotiť — zachytí snímku a ukáže náhľad s orezovým rámikom
 function ocrSnap() {
   const canvas = captureVideoFrame();
   if (!canvas) {
@@ -1877,8 +1960,11 @@ function ocrSnap() {
   document.getElementById('ocr-live-controls').style.display = 'none';
   document.getElementById('ocr-review').style.display = '';
   document.getElementById('ocr-review-controls').style.display = '';
+  document.getElementById('ocr-crop-hint').style.display = '';
   document.getElementById('ocr-progress').style.display = 'none';
-  setScannerStatus('Je text na fotke ostrý a čitateľný? Ak nie, odfoť znova.');
+  // Orezový rámik — po vyrenderovaní náhľadu (aby mal canvas reálne rozmery)
+  setTimeout(initCropBox, 60);
+  setScannerStatus('Potiahni okraje rámika len na text, potom „Použiť".');
 }
 
 // 2a) Odfotiť znova — zahodí náhľad, späť na živú kameru
@@ -1899,7 +1985,9 @@ async function ocrConfirm() {
 
   try {
     const worker = await getOcrWorker();
-    const result = await worker.recognize(_ocrCapturedCanvas);
+    // OCR beží LEN na orezanej časti (alebo na celej fotke ak rámik nie je)
+    const source = getCroppedCanvas() || _ocrCapturedCanvas;
+    const result = await worker.recognize(source);
     // Sériové čísla zvyčajne nemajú medzery — zahodíme biele znaky
     const text = (result?.data?.text || '').replace(/\s+/g, '').trim();
 
@@ -1925,6 +2013,106 @@ async function ocrConfirm() {
     if (retakeBtn) retakeBtn.disabled = false;
   }
 }
+// ===== OCR OREZOVÝ RÁMIK =====
+function initCropBox() {
+  const canvas = document.getElementById('ocr-review-canvas');
+  if (!canvas) return;
+  const rw = canvas.clientWidth, rh = canvas.clientHeight;
+  if (!rw || !rh) { setTimeout(initCropBox, 80); return; }
+  // Predvolený rámik: stredový pruh ~ kde býva sériové číslo
+  _crop = {
+    x: Math.round(rw * 0.08),
+    y: Math.round(rh * 0.34),
+    w: Math.round(rw * 0.84),
+    h: Math.round(rh * 0.32)
+  };
+  bindCropEvents();
+  renderCropBox();
+}
+
+function renderCropBox() {
+  const box = document.getElementById('ocr-crop-box');
+  if (!box || !_crop) return;
+  box.style.display = '';
+  box.style.left = _crop.x + 'px';
+  box.style.top = _crop.y + 'px';
+  box.style.width = _crop.w + 'px';
+  box.style.height = _crop.h + 'px';
+}
+
+function bindCropEvents() {
+  const box = document.getElementById('ocr-crop-box');
+  if (!box || box.dataset.bound) return;
+  box.dataset.bound = '1';
+
+  const startDrag = (e, mode) => {
+    if (!_crop) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _cropDrag = { mode, sx: e.clientX, sy: e.clientY, c0: Object.assign({}, _crop) };
+  };
+
+  box.addEventListener('pointerdown', e => {
+    if (e.target.classList && e.target.classList.contains('ocr-crop-handle')) return;
+    startDrag(e, 'move');
+  });
+  box.querySelectorAll('.ocr-crop-handle').forEach(h => {
+    const mode = h.classList.contains('top') ? 'top'
+      : h.classList.contains('bottom') ? 'bottom'
+      : h.classList.contains('left') ? 'left' : 'right';
+    h.addEventListener('pointerdown', e => startDrag(e, mode));
+  });
+
+  window.addEventListener('pointermove', e => {
+    if (!_cropDrag || !_crop) return;
+    const canvas = document.getElementById('ocr-review-canvas');
+    const maxW = canvas.clientWidth, maxH = canvas.clientHeight;
+    const MIN = 36;
+    const dx = e.clientX - _cropDrag.sx;
+    const dy = e.clientY - _cropDrag.sy;
+    const s = _cropDrag.c0;
+    const c = Object.assign({}, s);
+    if (_cropDrag.mode === 'move') {
+      c.x = Math.max(0, Math.min(s.x + dx, maxW - s.w));
+      c.y = Math.max(0, Math.min(s.y + dy, maxH - s.h));
+    } else if (_cropDrag.mode === 'left') {
+      const nx = Math.max(0, Math.min(s.x + dx, s.x + s.w - MIN));
+      c.x = nx; c.w = s.w + (s.x - nx);
+    } else if (_cropDrag.mode === 'right') {
+      c.w = Math.max(MIN, Math.min(s.w + dx, maxW - s.x));
+    } else if (_cropDrag.mode === 'top') {
+      const ny = Math.max(0, Math.min(s.y + dy, s.y + s.h - MIN));
+      c.y = ny; c.h = s.h + (s.y - ny);
+    } else if (_cropDrag.mode === 'bottom') {
+      c.h = Math.max(MIN, Math.min(s.h + dy, maxH - s.y));
+    }
+    _crop = c;
+    renderCropBox();
+  });
+  const endDrag = () => { _cropDrag = null; };
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+}
+
+// Vráti orezaný canvas pre OCR (alebo null ak rámik nie je / nemá rozmery)
+function getCroppedCanvas() {
+  if (!_ocrCapturedCanvas || !_crop) return null;
+  const disp = document.getElementById('ocr-review-canvas');
+  const dw = disp.clientWidth, dh = disp.clientHeight;
+  if (!dw || !dh) return null;
+  const scaleX = _ocrCapturedCanvas.width / dw;
+  const scaleY = _ocrCapturedCanvas.height / dh;
+  const sx = Math.max(0, Math.round(_crop.x * scaleX));
+  const sy = Math.max(0, Math.round(_crop.y * scaleY));
+  const sw = Math.min(Math.round(_crop.w * scaleX), _ocrCapturedCanvas.width - sx);
+  const sh = Math.min(Math.round(_crop.h * scaleY), _ocrCapturedCanvas.height - sy);
+  if (sw < 8 || sh < 8) return null;
+  const cc = document.createElement('canvas');
+  cc.width = sw; cc.height = sh;
+  cc.getContext('2d').drawImage(_ocrCapturedCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return cc;
+}
+
 // ===== PWA SERVICE WORKER REGISTRÁCIA =====
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
