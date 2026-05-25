@@ -1779,8 +1779,9 @@ function afterCameraStart() {
 function toggleTorch() {
   if (!_scannerTrack) { showToast('Kamera ešte nie je pripravená', 'error'); return; }
   const want = !_torchOn;
-  // Rôzne Android Chrome verzie / výrobcovia akceptujú rôzne formy.
-  // Skúsime tri patterny postupne — to nám aj diagnosticky povie kde to padá.
+  // POZOR: 'advanced' constraints sú best-effort — applyConstraints resolvne
+  // aj keď torch v skutočnosti nezapne. Preto po každom resolve overujeme
+  // cez getSettings().torch či sa LED naozaj prepla.
   const patterns = [
     { advanced: [{ torch: want }] },
     { torch: want },
@@ -1793,14 +1794,26 @@ function toggleTorch() {
       updateTorchBtn();
       const b = document.getElementById('scanner-torch-btn');
       if (b) b.style.display = 'none';
-      const errInfo = lastErr
-        ? ' (' + (lastErr.name || 'err') + ': ' + String(lastErr.message || lastErr).slice(0, 70) + ')'
-        : '';
-      showToast('Blesk sa nepodarilo zapnúť' + errInfo, 'error');
+      // Diagnostika: čo o torchi hovorí API
+      const caps = (_scannerTrack.getCapabilities && _scannerTrack.getCapabilities()) || {};
+      const sett = (_scannerTrack.getSettings && _scannerTrack.getSettings()) || {};
+      const capsT = JSON.stringify(caps.torch);
+      const settT = JSON.stringify(sett.torch);
+      const errPart = lastErr ? '; ' + (lastErr.name || 'err') + ':' + String(lastErr.message || lastErr).slice(0, 40) : '';
+      showToast('Blesk sa nedá zapnúť (caps.torch=' + capsT + ', settings.torch=' + settT + errPart + ')', 'error');
       return;
     }
     _scannerTrack.applyConstraints(patterns[i])
-      .then(() => { _torchOn = want; updateTorchBtn(); })
+      .then(() => {
+        // Verifikuj — getSettings().torch musí byť === want, inak skús ďalší pattern
+        const settings = (_scannerTrack.getSettings && _scannerTrack.getSettings()) || {};
+        if (settings.torch === want) {
+          _torchOn = want;
+          updateTorchBtn();
+        } else {
+          tryNext(i + 1, new Error('settings.torch=' + JSON.stringify(settings.torch)));
+        }
+      })
       .catch(err => tryNext(i + 1, err));
   };
   tryNext(0, null);
