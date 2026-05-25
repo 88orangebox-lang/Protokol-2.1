@@ -423,7 +423,8 @@ input[readonly], input:disabled, select:disabled {
   .scanner-torch-btn.torch-on { background: #f59e0b; color: #1a1a1a; border-color: #f59e0b; }
   #ocr-review { width: 100%; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
   .ocr-review-canvas { width: 100%; height: auto; display: block; }
-  #ocr-crop-box { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,0.55); box-sizing: border-box; cursor: move; touch-action: none; }
+  #ocr-crop-box { position: absolute; border: 2px solid #fff; box-sizing: border-box; cursor: move; touch-action: none; }
+  .ocr-dim { position: absolute; background: rgba(0,0,0,0.55); pointer-events: none; }
   .ocr-crop-handle { position: absolute; background: var(--accent); border: 2px solid #fff; box-sizing: border-box; touch-action: none; }
   .ocr-crop-handle.top, .ocr-crop-handle.bottom { left: 50%; width: 42px; height: 16px; margin-left: -21px; border-radius: 8px; cursor: ns-resize; }
   .ocr-crop-handle.left, .ocr-crop-handle.right { top: 50%; width: 16px; height: 42px; margin-top: -21px; border-radius: 8px; cursor: ew-resize; }
@@ -602,6 +603,10 @@ input[readonly], input:disabled, select:disabled {
       <div id="scanner-reader"></div>
       <div id="ocr-review" style="display:none;">
         <canvas id="ocr-review-canvas" class="ocr-review-canvas"></canvas>
+        <div class="ocr-dim ocr-dim-top" style="display:none;"></div>
+        <div class="ocr-dim ocr-dim-bottom" style="display:none;"></div>
+        <div class="ocr-dim ocr-dim-left" style="display:none;"></div>
+        <div class="ocr-dim ocr-dim-right" style="display:none;"></div>
         <div id="ocr-crop-box" style="display:none;">
           <div class="ocr-crop-handle top"></div>
           <div class="ocr-crop-handle bottom"></div>
@@ -1616,6 +1621,7 @@ let _torchUnsupported = false;// zariadenie blesk cez web nepodporuje
 let _ocrCapturedCanvas = null;// zachytená OCR fotka čakajúca na potvrdenie
 let _crop = null;             // orezový rámik {x,y,w,h} v CSS px náhľadu
 let _cropDrag = null;         // stav ťahania orezového rámika
+let _renderPending = false;   // rAF-batch flag pre plynulé prekresľovanie
 
 function openScanner(targetInputId) {
   if (typeof Html5Qrcode === 'undefined' || window.__scannerLibFailed) {
@@ -1699,8 +1705,11 @@ function scannerQrbox(viewW, viewH) {
 // čo nikdy nezablokuje samotný štart kamery.
 function startScannerCamera() {
   setScannerStatus(_scannerMode === 'ocr'
-    ? 'Namier na štítok a stlač „Odfotiť"'
-    : 'Namier kamerou na čiarový alebo QR kód...');
+    ? 'Spúšťam kameru...'
+    : 'Spúšťam kameru...');
+  // Kým kamera nie je hotová, blokuj snap (inak by user klikol naprázdno)
+  const snapBtn = document.getElementById('ocr-snap-btn');
+  if (snapBtn) snapBtn.disabled = true;
   _scannerInstance = new Html5Qrcode('scanner-reader');
   const config = { fps: 10, qrbox: scannerQrbox };
   const onDecoded = (txt) => { if (_scannerMode === 'barcode') onScanSuccess(txt); };
@@ -1713,6 +1722,9 @@ function startScannerCamera() {
         .then(afterCameraStart)
         .catch(err => {
           setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
+          // Defenzívne — aby snap nezostal stuck disabled ak kamera zlyhá
+          const snapBtn = document.getElementById('ocr-snap-btn');
+          if (snapBtn) snapBtn.disabled = false;
         });
     });
 }
@@ -1721,6 +1733,12 @@ function startScannerCamera() {
 // ťuknutím-zaostriť. Beží AŽ po štarte — nemôže zlomiť spustenie kamery.
 function afterCameraStart() {
   setTimeout(() => {
+    // Snap odblokuj HNEĎ — nech nezostane stuck disabled, aj keď track ops zlyhajú
+    const snapBtnNow = document.getElementById('ocr-snap-btn');
+    if (snapBtnNow) snapBtnNow.disabled = false;
+    setScannerStatus(_scannerMode === 'ocr'
+      ? 'Namier na štítok a stlač „Odfotiť"'
+      : 'Namier kamerou na čiarový alebo QR kód...');
     try {
       const video = document.querySelector('#scanner-reader video');
       const stream = video && video.srcObject;
@@ -1761,17 +1779,31 @@ function afterCameraStart() {
 function toggleTorch() {
   if (!_scannerTrack) { showToast('Kamera ešte nie je pripravená', 'error'); return; }
   const want = !_torchOn;
-  _scannerTrack.applyConstraints({ advanced: [{ torch: want }] })
-    .then(() => { _torchOn = want; updateTorchBtn(); })
-    .catch(() => {
-      // Zariadenie/prehliadač blesk cez web nepodporuje — skryjeme tlačidlo
+  // Rôzne Android Chrome verzie / výrobcovia akceptujú rôzne formy.
+  // Skúsime tri patterny postupne — to nám aj diagnosticky povie kde to padá.
+  const patterns = [
+    { advanced: [{ torch: want }] },
+    { torch: want },
+    { advanced: [{ torch: want, focusMode: 'continuous' }] }
+  ];
+  const tryNext = (i, lastErr) => {
+    if (i >= patterns.length) {
       _torchOn = false;
       _torchUnsupported = true;
       updateTorchBtn();
       const b = document.getElementById('scanner-torch-btn');
       if (b) b.style.display = 'none';
-      showToast('Toto zariadenie nepodporuje ovládanie blesku cez prehliadač', 'error');
-    });
+      const errInfo = lastErr
+        ? ' (' + (lastErr.name || 'err') + ': ' + String(lastErr.message || lastErr).slice(0, 70) + ')'
+        : '';
+      showToast('Blesk sa nepodarilo zapnúť' + errInfo, 'error');
+      return;
+    }
+    _scannerTrack.applyConstraints(patterns[i])
+      .then(() => { _torchOn = want; updateTorchBtn(); })
+      .catch(err => tryNext(i + 1, err));
+  };
+  tryNext(0, null);
 }
 function torchOff() {
   if (_scannerTrack && _torchOn) {
@@ -1931,6 +1963,7 @@ function resetOcrReviewUI() {
   _ocrCapturedCanvas = null;
   _crop = null;
   _cropDrag = null;
+  _renderPending = false;
   const set = (id, disp) => { const e = document.getElementById(id); if (e) e.style.display = disp; };
   set('ocr-review', 'none');
   set('ocr-review-controls', 'none');
@@ -1939,6 +1972,8 @@ function resetOcrReviewUI() {
   set('scanner-reader', '');
   set('ocr-live-controls', '');
   set('ocr-progress', 'none');
+  // Skryjeme aj dim divy okolo orezového rámika
+  document.querySelectorAll('#ocr-review .ocr-dim').forEach(d => { d.style.display = 'none'; });
   const snap = document.getElementById('ocr-snap-btn'); if (snap) snap.disabled = false;
   const useB = document.getElementById('ocr-use-btn'); if (useB) useB.disabled = false;
   const reB = document.getElementById('ocr-retake-btn'); if (reB) reB.disabled = false;
@@ -2038,6 +2073,25 @@ function renderCropBox() {
   box.style.top = _crop.y + 'px';
   box.style.width = _crop.w + 'px';
   box.style.height = _crop.h + 'px';
+  // Dim divy okolo rámika — lacný repaint vs. veľký box-shadow
+  const review = document.getElementById('ocr-review');
+  const canvas = document.getElementById('ocr-review-canvas');
+  if (!review || !canvas) return;
+  const maxW = canvas.clientWidth, maxH = canvas.clientHeight;
+  const setDim = (sel, l, t, w, h) => {
+    const e = review.querySelector(sel);
+    if (!e) return;
+    if (w <= 0 || h <= 0) { e.style.display = 'none'; return; }
+    e.style.display = '';
+    e.style.left = l + 'px';
+    e.style.top = t + 'px';
+    e.style.width = w + 'px';
+    e.style.height = h + 'px';
+  };
+  setDim('.ocr-dim-top',    0,                 0,                 maxW,                            _crop.y);
+  setDim('.ocr-dim-bottom', 0,                 _crop.y + _crop.h, maxW,                            maxH - _crop.y - _crop.h);
+  setDim('.ocr-dim-left',   0,                 _crop.y,           _crop.x,                         _crop.h);
+  setDim('.ocr-dim-right',  _crop.x + _crop.w, _crop.y,           maxW - _crop.x - _crop.w,        _crop.h);
 }
 
 function bindCropEvents() {
@@ -2087,7 +2141,11 @@ function bindCropEvents() {
       c.h = Math.max(MIN, Math.min(s.h + dy, maxH - s.y));
     }
     _crop = c;
-    renderCropBox();
+    // rAF batch — max 1 prekreslenie za animation frame (plynulé na 60-120 Hz)
+    if (!_renderPending) {
+      _renderPending = true;
+      requestAnimationFrame(() => { _renderPending = false; renderCropBox(); });
+    }
   });
   const endDrag = () => { _cropDrag = null; };
   window.addEventListener('pointerup', endDrag);
