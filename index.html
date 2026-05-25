@@ -1704,12 +1704,10 @@ function scannerQrbox(viewW, viewH) {
 // NEsmú ísť — doladíme ich až PO štarte cez applyConstraints (afterCameraStart),
 // čo nikdy nezablokuje samotný štart kamery.
 function startScannerCamera() {
-  setScannerStatus(_scannerMode === 'ocr'
-    ? 'Spúšťam kameru...'
-    : 'Spúšťam kameru...');
-  // Kým kamera nie je hotová, blokuj snap (inak by user klikol naprázdno)
+  setScannerStatus('Spúšťam kameru...');
+  // Kým kamera nie je hotová, blokuj snap + jasný vizuálny indikátor (loading text)
   const snapBtn = document.getElementById('ocr-snap-btn');
-  if (snapBtn) snapBtn.disabled = true;
+  if (snapBtn) { snapBtn.disabled = true; snapBtn.textContent = '⏳ Načítavam kameru...'; }
   _scannerInstance = new Html5Qrcode('scanner-reader');
   const config = { fps: 10, qrbox: scannerQrbox };
   const onDecoded = (txt) => { if (_scannerMode === 'barcode') onScanSuccess(txt); };
@@ -1724,7 +1722,7 @@ function startScannerCamera() {
           setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
           // Defenzívne — aby snap nezostal stuck disabled ak kamera zlyhá
           const snapBtn = document.getElementById('ocr-snap-btn');
-          if (snapBtn) snapBtn.disabled = false;
+          if (snapBtn) { snapBtn.disabled = false; snapBtn.textContent = '📸 Odfotiť'; }
         });
     });
 }
@@ -1735,7 +1733,7 @@ function afterCameraStart() {
   setTimeout(() => {
     // Snap odblokuj HNEĎ — nech nezostane stuck disabled, aj keď track ops zlyhajú
     const snapBtnNow = document.getElementById('ocr-snap-btn');
-    if (snapBtnNow) snapBtnNow.disabled = false;
+    if (snapBtnNow) { snapBtnNow.disabled = false; snapBtnNow.textContent = '📸 Odfotiť'; }
     setScannerStatus(_scannerMode === 'ocr'
       ? 'Namier na štítok a stlač „Odfotiť"'
       : 'Namier kamerou na čiarový alebo QR kód...');
@@ -1778,10 +1776,26 @@ function afterCameraStart() {
 // ===== BLESK / TORCH =====
 function toggleTorch() {
   if (!_scannerTrack) { showToast('Kamera ešte nie je pripravená', 'error'); return; }
+  const caps = (_scannerTrack.getCapabilities && _scannerTrack.getCapabilities()) || {};
+
+  // KRITICKÉ: ak API nehlási torch capability, applyConstraints by len reject-oval
+  // (OverconstrainedError) — a tento reject v Chrome na Galaxy môže rozhodiť stav
+  // tracku (potom zlyhá ďalší reštart kamery a OCR snap "nereaguje").
+  // Preto sa ho VÔBEC nepokúšame zapnúť ak ho API nehlási.
+  if (caps.torch !== true) {
+    _torchOn = false;
+    _torchUnsupported = true;
+    updateTorchBtn();
+    const b = document.getElementById('scanner-torch-btn');
+    if (b) b.style.display = 'none';
+    showToast('Chrome na tomto telefóne nevystavuje ovládanie blesku. Použi systémovú baterku Androidu (potiahni z hora) pred otvorením skenera.', 'error');
+    return;
+  }
+
+  // caps.torch === true: skúsme niekoľko patternov + overme cez getSettings že
+  // sa LED naozaj prepla (advanced constraints sú best-effort — resolve nemusí
+  // znamenať že sa to fyzicky stalo).
   const want = !_torchOn;
-  // POZOR: 'advanced' constraints sú best-effort — applyConstraints resolvne
-  // aj keď torch v skutočnosti nezapne. Preto po každom resolve overujeme
-  // cez getSettings().torch či sa LED naozaj prepla.
   const patterns = [
     { advanced: [{ torch: want }] },
     { torch: want },
@@ -1794,18 +1808,13 @@ function toggleTorch() {
       updateTorchBtn();
       const b = document.getElementById('scanner-torch-btn');
       if (b) b.style.display = 'none';
-      // Diagnostika: čo o torchi hovorí API
-      const caps = (_scannerTrack.getCapabilities && _scannerTrack.getCapabilities()) || {};
       const sett = (_scannerTrack.getSettings && _scannerTrack.getSettings()) || {};
-      const capsT = JSON.stringify(caps.torch);
-      const settT = JSON.stringify(sett.torch);
       const errPart = lastErr ? '; ' + (lastErr.name || 'err') + ':' + String(lastErr.message || lastErr).slice(0, 40) : '';
-      showToast('Blesk sa nedá zapnúť (caps.torch=' + capsT + ', settings.torch=' + settT + errPart + ')', 'error');
+      showToast('Blesk: API tvrdí že je podporovaný ale neaktivuje sa (settings.torch=' + JSON.stringify(sett.torch) + errPart + ')', 'error');
       return;
     }
     _scannerTrack.applyConstraints(patterns[i])
       .then(() => {
-        // Verifikuj — getSettings().torch musí byť === want, inak skús ďalší pattern
         const settings = (_scannerTrack.getSettings && _scannerTrack.getSettings()) || {};
         if (settings.torch === want) {
           _torchOn = want;
