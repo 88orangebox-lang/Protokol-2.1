@@ -150,7 +150,7 @@
   .field-warn { font-size: 11px; color: #f59e0b; margin-top: 4px; display: flex; align-items: center; gap: 4px; }
 
   /* TOAST */
-  .toast { position: fixed; bottom: 24px; right: 24px; background: #1a2332; color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 13px; opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 9999; }
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #1a2332; color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 13px; opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 9999; pointer-events: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.success { background: #16a34a; }
   .toast.error { background: #dc2626; }
@@ -619,9 +619,6 @@ input[readonly], input:disabled, select:disabled {
         </div>
       </div>
       <div class="ocr-crop-hint" id="ocr-crop-hint" style="display:none;">Potiahni okraje rámika – ostane len text vnútri</div>
-      <div class="scanner-toolbar">
-        <button class="scanner-torch-btn" id="scanner-torch-btn" onclick="toggleTorch()" style="display:none;">🔦 Blesk</button>
-      </div>
       <div class="ocr-controls" id="scanner-ocr-controls" style="display:none;">
         <div id="ocr-live-controls">
           <button class="btn btn-primary" id="ocr-snap-btn" onclick="ocrSnap()">📸 Odfotiť</button>
