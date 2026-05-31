@@ -1700,10 +1700,15 @@ function scannerQrbox(viewW, viewH) {
 }
 
 // Jednotný štart kamery pre oba režimy.
-// DÔLEŽITÉ: html5-qrcode vyžaduje, aby prvý parameter start() bol objekt
-// s PRÁVE 1 kľúčom (facingMode ALEBO deviceId). Rozlíšenie a ostrenie sem
-// NEsmú ísť — doladíme ich až PO štarte cez applyConstraints (afterCameraStart),
-// čo nikdy nezablokuje samotný štart kamery.
+// KĽÚČOVÉ pre kvalitu čítania:
+//  1) experimentalFeatures.useBarCodeDetectorIfSupported = true → na Androide
+//     Chrome použije NATÍVNY BarcodeDetector (ML Kit) — rovnaký engine ako
+//     banking/skener appky. Bez toho beží slabý ZXing-JS dekodér.
+//  2) videoConstraints s HD rozlíšením + focusMode:continuous → ostrý obraz a
+//     poriadny autofokus už pri štarte streamu (nie default ~640×480). Lepší
+//     obraz = lepšie čítanie kódov aj lepšie OCR (fotí z toho istého streamu).
+// Pozn.: videoConstraints validátor knižnice odmieta len audio kľúče;
+// width/height/facingMode/advanced prechádzajú.
 function startScannerCamera() {
   setScannerStatus('Spúšťam kameru...');
   // Snap NEzablokujeme — ostane klikateľný. Loading text je len vizuálny signál.
@@ -1711,20 +1716,37 @@ function startScannerCamera() {
   const snapBtn = document.getElementById('ocr-snap-btn');
   if (snapBtn) snapBtn.textContent = '⏳ Načítavam kameru...';
   _scannerInstance = new Html5Qrcode('scanner-reader');
-  const config = { fps: 10, qrbox: scannerQrbox };
   const onDecoded = (txt) => { if (_scannerMode === 'barcode') onScanSuccess(txt); };
 
-  _scannerInstance.start({ facingMode: { exact: 'environment' } }, config, onDecoded, () => {})
+  // HD konfigurácia (prvá voľba)
+  const hdConfig = {
+    fps: 15,
+    qrbox: scannerQrbox,
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+    videoConstraints: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      advanced: [{ focusMode: 'continuous' }]
+    }
+  };
+  // Núdzová konfigurácia ak by staršie zariadenie HD/advanced odmietlo
+  const safeConfig = {
+    fps: 10,
+    qrbox: scannerQrbox,
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+  };
+
+  _scannerInstance.start({ facingMode: 'environment' }, hdConfig, onDecoded, () => {})
     .then(afterCameraStart)
     .catch(() => {
-      // Fallback: zadná kamera bez "exact" (zariadenia bez striktnej zadnej kamery)
-      _scannerInstance.start({ facingMode: 'environment' }, config, onDecoded, () => {})
+      // Fallback: bez HD/focus constraints (niektoré zariadenia ich odmietnu)
+      _scannerInstance.start({ facingMode: 'environment' }, safeConfig, onDecoded, () => {})
         .then(afterCameraStart)
         .catch(err => {
           setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
-          // Vráť snap text späť na "Odfotiť" aby user vedel skúsiť znova
-          const snapBtn = document.getElementById('ocr-snap-btn');
-          if (snapBtn) snapBtn.textContent = '📸 Odfotiť';
+          const sb = document.getElementById('ocr-snap-btn');
+          if (sb) sb.textContent = '📸 Odfotiť';
         });
     });
 }
@@ -1748,15 +1770,11 @@ function afterCameraStart() {
       _scannerTrack = track;
       const caps = (track.getCapabilities && track.getCapabilities()) || {};
 
-      // Doladenie: plynulé ostrenie + čo najvyššie rozlíšenie (best-effort).
-      const tune = { advanced: [] };
+      // Rozlíšenie sme už nastavili v videoConstraints pri štarte — tu len
+      // posilníme plynulé ostrenie (reinforcement; width/height znova nenastavujeme,
+      // aby sme nespôsobili rekonfiguráciu streamu / flicker).
       if (caps.focusMode && caps.focusMode.indexOf && caps.focusMode.indexOf('continuous') !== -1) {
-        tune.advanced.push({ focusMode: 'continuous' });
-      }
-      if (caps.width && caps.width.max) tune.width = { ideal: Math.min(1920, caps.width.max) };
-      if (caps.height && caps.height.max) tune.height = { ideal: Math.min(1080, caps.height.max) };
-      if (tune.advanced.length || tune.width || tune.height) {
-        track.applyConstraints(tune).catch(() => {});
+        track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
       }
 
       // Blesk: tlačidlo zobrazíme VŽDY (detekcia caps.torch je nespoľahlivá,
