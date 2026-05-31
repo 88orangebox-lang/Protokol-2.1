@@ -1384,6 +1384,7 @@ const DRIVE_BACKUP_FILENAME = 'mpkomfort_zaloha.json';
 
 let _gisTokenClient = null;
 let _driveToken = null;
+let _driveTokenExpiry = 0;   // kedy token vyprší (ms timestamp)
 let _tokenPending = null;
 
 // Lazy-load Google Identity Services (online; offline → reject)
@@ -1406,10 +1407,16 @@ function loadGis() {
   });
 }
 
-// Access token: prvýkrát popup so súhlasom, potom ticho ak to ide.
-// Volá sa z click handlera (gesto) — GIS si vypýta token cez popup.
+// Access token s cachovaním: kým je token platný (~1 h), znova ho použijeme
+// BEZ akéhokoľvek popupu/výberu účtu. Až po expirácii pýtame nový.
+// (Statická appka bez backendu nedostane "refresh token" — 1 h je strop, ktorý
+//  Google dáva prehliadačovým appkám z bezpečnostných dôvodov.)
 function ensureDriveToken() {
   return new Promise((resolve, reject) => {
+    // Platný token v pamäti (s 60 s rezervou) → použijeme ho, žiadne UI
+    if (_driveToken && Date.now() < _driveTokenExpiry - 60000) {
+      return resolve(_driveToken);
+    }
     loadGis().then(() => {
       _tokenPending = { resolve, reject };
       if (!_gisTokenClient) {
@@ -1418,8 +1425,12 @@ function ensureDriveToken() {
           scope: DRIVE_SCOPE,
           callback: (resp) => {
             const p = _tokenPending; _tokenPending = null;
-            if (resp && resp.access_token) { _driveToken = resp.access_token; if (p) p.resolve(resp.access_token); }
-            else if (p) p.reject(new Error('Prihlásenie zlyhalo'));
+            if (resp && resp.access_token) {
+              _driveToken = resp.access_token;
+              // expires_in je v sekundách (~3600); uložíme čas expirácie
+              _driveTokenExpiry = Date.now() + ((parseInt(resp.expires_in) || 3600) * 1000);
+              if (p) p.resolve(resp.access_token);
+            } else if (p) p.reject(new Error('Prihlásenie zlyhalo'));
           },
           error_callback: () => {
             const p = _tokenPending; _tokenPending = null;
