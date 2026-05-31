@@ -1481,6 +1481,24 @@ async function driveFindBackup(folderId) {
 // ☁️ ZÁLOHOVAŤ — nahrá/prepíše jeden JSON súbor v Drive priečinku
 async function driveBackup() {
   if (!navigator.onLine) { showToast('☁️ Google Disk potrebuje internet', 'error'); return; }
+
+  // Potvrdenie pred prepísaním — nová záloha NAHRADÍ pôvodnú a nedá sa vrátiť.
+  // Ak zálohuješ prázdny stav (0 protokolov), zvlášť silné varovanie —
+  // presne to zabráni omylu typu "prepísal som dobrú zálohu prázdnou".
+  const count = protocols.length;
+  let confirmMsg;
+  if (count === 0) {
+    confirmMsg = '⚠️ POZOR — žiadne protokoly!\n\n' +
+      'Práve nemáš uložený ani jeden protokol (0).\n\n' +
+      'Ak budeš pokračovať, PREPÍŠEŠ existujúcu zálohu na Google Disku PRÁZDNOU zálohou ' +
+      'a pôvodnú už NEBUDE možné vrátiť späť.\n\n' +
+      'Naozaj chceš zálohovať prázdny stav?';
+  } else {
+    confirmMsg = 'Zálohovať ' + count + ' protokol(ov) na Google Disk?\n\n' +
+      'Nová záloha PREPÍŠE pôvodnú zálohu na Disku — túto akciu NIE JE možné vrátiť späť.';
+  }
+  if (!confirm(confirmMsg)) return;
+
   try {
     showToast('Prihlasujem na Google...');
     await ensureDriveToken();
