@@ -607,6 +607,9 @@ input[readonly], input:disabled, select:disabled {
       <div class="scanner-target-info" id="scanner-target-info"></div>
       <div class="scanner-status" id="scanner-status">Spúšťam kameru...</div>
       <div id="scanner-reader"></div>
+      <div class="ocr-controls" id="scanner-barcode-controls">
+        <button class="btn btn-primary" id="barcode-snap-btn" onclick="barcodeSnapDecode()">📸 Odfotiť kód (ak sa nenačíta sám)</button>
+      </div>
       <div id="ocr-review" style="display:none;">
         <canvas id="ocr-review-canvas" class="ocr-review-canvas"></canvas>
         <div class="ocr-dim ocr-dim-top" style="display:none;"></div>
@@ -1836,6 +1839,7 @@ function openScanner(targetInputId) {
   document.getElementById('scanner-tab-barcode').classList.add('active');
   document.getElementById('scanner-tab-ocr').classList.remove('active');
   document.getElementById('scanner-ocr-controls').style.display = 'none';
+  document.getElementById('scanner-barcode-controls').style.display = '';
   resetOcrReviewUI();
 
   // Info o cieľovom políčku
@@ -1874,6 +1878,7 @@ function setScannerMode(mode) {
   document.getElementById('scanner-tab-barcode').classList.toggle('active', mode === 'barcode');
   document.getElementById('scanner-tab-ocr').classList.toggle('active', mode === 'ocr');
   document.getElementById('scanner-ocr-controls').style.display = (mode === 'ocr') ? '' : 'none';
+  document.getElementById('scanner-barcode-controls').style.display = (mode === 'barcode') ? '' : 'none';
   resetOcrReviewUI();
 
   // Reštart kamery v novom režime
@@ -1956,6 +1961,9 @@ function afterCameraStart() {
     // Snap text späť na "Odfotiť" — kamera je hotová
     const snapBtnNow = document.getElementById('ocr-snap-btn');
     if (snapBtnNow) snapBtnNow.textContent = '📸 Odfotiť';
+    // Foto-dekód tlačidlo znova povolíme (mohlo zostať disabled po predošlom pokuse)
+    const bSnap = document.getElementById('barcode-snap-btn');
+    if (bSnap) bSnap.disabled = false;
     setScannerStatus(_scannerMode === 'ocr'
       ? 'Namier na štítok a stlač „Odfotiť"'
       : 'Namier kamerou na čiarový alebo QR kód...');
@@ -2132,6 +2140,69 @@ function onScanSuccess(text) {
   setScannerStatus('✅ Načítané: ' + clean, 'success');
   // Krátka pauza aby user videl úspech, potom zavrieme
   setTimeout(closeScanner, 700);
+}
+
+// ===== FOTO-DEKÓD ČIAROVÉHO KÓDU =====
+// Živé skenovanie číta preview snímky (nižšie rozlíšenie, pohybové rozmazanie).
+// Toto odfotí JEDNU snímku v čo najvyššom rozlíšení a pustí na ňu BarcodeDetector
+// (ten istý ML Kit) na CELÝ záber — pre husté/mäkké Code128 štítky výrazne lepšie.
+
+// Zachytí ostrú snímku: ImageCapture.takePhoto (plné rozlíšenie senzora) →
+// grabFrame (rozlíšenie streamu) → kreslenie video elementu na canvas (fallback).
+async function captureStillBitmap() {
+  if (_scannerTrack && window.ImageCapture) {
+    try {
+      const ic = new ImageCapture(_scannerTrack);
+      try {
+        const blob = await ic.takePhoto();
+        return await createImageBitmap(blob);
+      } catch(e) {
+        return await ic.grabFrame();
+      }
+    } catch(e) { /* fallback nižšie */ }
+  }
+  const video = document.querySelector('#scanner-reader video');
+  if (video && video.videoWidth) {
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    return c; // canvas je platný vstup pre BarcodeDetector aj createImageBitmap
+  }
+  return null;
+}
+
+async function barcodeSnapDecode() {
+  if (!('BarcodeDetector' in window)) {
+    setScannerStatus('Tento prehliadač nepodporuje fotodekódovanie — skús živé skenovanie.', 'error');
+    return;
+  }
+  const btn = document.getElementById('barcode-snap-btn');
+  if (btn) btn.disabled = true;
+  setScannerStatus('Fotím a čítam kód...');
+  try {
+    const img = await captureStillBitmap();
+    if (!img) {
+      setScannerStatus('Kamera ešte nie je pripravená, skús o chvíľu.', 'error');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    let detector;
+    try {
+      const fmts = await BarcodeDetector.getSupportedFormats();
+      detector = (fmts && fmts.length) ? new BarcodeDetector({ formats: fmts }) : new BarcodeDetector();
+    } catch(e) { detector = new BarcodeDetector(); }
+    const codes = await detector.detect(img);
+    if (codes && codes.length && codes[0].rawValue) {
+      onScanSuccess(codes[0].rawValue);  // vyplní políčko + zatvorí
+    } else {
+      setScannerStatus('Kód som nenašiel — priblíž sa, vyrovnaj štítok a nezakrývaj ho prstom.', 'error');
+      if (btn) btn.disabled = false;
+    }
+  } catch(e) {
+    setScannerStatus('Čítanie kódu zlyhalo: ' + (e.message || e), 'error');
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ===== OCR (Tesseract.js) =====
