@@ -609,7 +609,9 @@ input[readonly], input:disabled, select:disabled {
       <div id="scanner-reader"></div>
       <div class="ocr-controls" id="scanner-barcode-controls">
         <button class="btn btn-primary" id="barcode-snap-btn" onclick="barcodeSnapDecode()">📸 Odfotiť kód (ak sa nenačíta sám)</button>
+        <div style="margin-top:8px;"><button class="btn btn-secondary" id="barcode-file-btn" onclick="document.getElementById('scanner-file-input').click()">🖼️ Načítať fotku zo zariadenia</button></div>
       </div>
+      <input type="file" accept="image/*" id="scanner-file-input" style="display:none;" onchange="onScannerFileChosen(this)">
       <div id="ocr-review" style="display:none;">
         <canvas id="ocr-review-canvas" class="ocr-review-canvas"></canvas>
         <div class="ocr-dim ocr-dim-top" style="display:none;"></div>
@@ -627,6 +629,7 @@ input[readonly], input:disabled, select:disabled {
       <div class="ocr-controls" id="scanner-ocr-controls" style="display:none;">
         <div id="ocr-live-controls">
           <button class="btn btn-primary" id="ocr-snap-btn" onclick="ocrSnap()">📸 Odfotiť</button>
+          <div style="margin-top:8px;"><button class="btn btn-secondary" id="ocr-file-btn" onclick="document.getElementById('scanner-file-input').click()">🖼️ Načítať fotku zo zariadenia</button></div>
         </div>
         <div id="ocr-review-controls" style="display:none;">
           <button class="btn btn-secondary" id="ocr-retake-btn" onclick="ocrRetake()">↻ Odfotiť znova</button>
@@ -2172,6 +2175,17 @@ async function captureStillBitmap() {
   return null;
 }
 
+// Spustí BarcodeDetector na obrázok/canvas/bitmap; vráti prvý kód alebo null
+async function runBarcodeDetector(img) {
+  let detector;
+  try {
+    const fmts = await BarcodeDetector.getSupportedFormats();
+    detector = (fmts && fmts.length) ? new BarcodeDetector({ formats: fmts }) : new BarcodeDetector();
+  } catch(e) { detector = new BarcodeDetector(); }
+  const codes = await detector.detect(img);
+  return (codes && codes.length && codes[0].rawValue) ? codes[0].rawValue : null;
+}
+
 async function barcodeSnapDecode() {
   if (!('BarcodeDetector' in window)) {
     setScannerStatus('Tento prehliadač nepodporuje fotodekódovanie — skús živé skenovanie.', 'error');
@@ -2187,14 +2201,9 @@ async function barcodeSnapDecode() {
       if (btn) btn.disabled = false;
       return;
     }
-    let detector;
-    try {
-      const fmts = await BarcodeDetector.getSupportedFormats();
-      detector = (fmts && fmts.length) ? new BarcodeDetector({ formats: fmts }) : new BarcodeDetector();
-    } catch(e) { detector = new BarcodeDetector(); }
-    const codes = await detector.detect(img);
-    if (codes && codes.length && codes[0].rawValue) {
-      onScanSuccess(codes[0].rawValue);  // vyplní políčko + zatvorí
+    const code = await runBarcodeDetector(img);
+    if (code) {
+      onScanSuccess(code);  // vyplní políčko + zatvorí
     } else {
       setScannerStatus('Kód som nenašiel — priblíž sa, vyrovnaj štítok a nezakrývaj ho prstom.', 'error');
       if (btn) btn.disabled = false;
@@ -2203,6 +2212,76 @@ async function barcodeSnapDecode() {
     setScannerStatus('Čítanie kódu zlyhalo: ' + (e.message || e), 'error');
     if (btn) btn.disabled = false;
   }
+}
+
+// ===== NAČÍTANIE FOTKY ZO ZARIADENIA / GALÉRIE =====
+// Natívny fotoaparát zaostruje lepšie než WebView kamera. Fotka z galérie
+// (alebo poslaná kolegom) je ostrá → BarcodeDetector aj OCR čítajú spoľahlivejšie.
+
+// Súbor → bitmap/canvas s rešpektovaním EXIF rotácie + zmenšenie veľkých fotiek
+async function fileToBitmap(file) {
+  let bmp;
+  try {
+    bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch(e) {
+    bmp = await createImageBitmap(file); // staršie prehliadače bez orientácie
+  }
+  const MAX = 3000; // dlhšia strana — dosť detailu pre kód aj OCR, šetrí pamäť/čas
+  const longSide = Math.max(bmp.width, bmp.height);
+  if (longSide > MAX) {
+    const scale = MAX / longSide;
+    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    return c;
+  }
+  return bmp;
+}
+
+async function onScannerFileChosen(input) {
+  const file = input.files && input.files[0];
+  input.value = ''; // reset, nech sa dá vybrať ten istý súbor znova
+  if (!file) return;
+  if (!file.type || file.type.indexOf('image/') !== 0) {
+    setScannerStatus('Vyber prosím obrázok (fotku).', 'error');
+    return;
+  }
+  setScannerStatus('Načítavam fotku...');
+  try {
+    const img = await fileToBitmap(file);
+    if (_scannerMode === 'ocr') {
+      loadImageForOcr(img);            // do orezového rámika → Tesseract
+    } else {
+      await decodeBarcodeFromFileImage(img);
+    }
+  } catch(e) {
+    setScannerStatus('Fotku sa nepodarilo načítať: ' + (e.message || e), 'error');
+  }
+}
+
+async function decodeBarcodeFromFileImage(img) {
+  if (!('BarcodeDetector' in window)) {
+    setScannerStatus('Tento prehliadač nepodporuje čítanie kódu z fotky.', 'error');
+    return;
+  }
+  setScannerStatus('Čítam kód z fotky...');
+  try {
+    const code = await runBarcodeDetector(img);
+    if (code) onScanSuccess(code);
+    else setScannerStatus('V tejto fotke som kód nenašiel. Skús ostrejšiu/bližšiu fotku.', 'error');
+  } catch(e) {
+    setScannerStatus('Čítanie kódu z fotky zlyhalo: ' + (e.message || e), 'error');
+  }
+}
+
+// Načíta fotku do OCR pipeline (rovnaký orezový rámik ako pri odfotení)
+function loadImageForOcr(img) {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  canvas.getContext('2d').drawImage(img, 0, 0);
+  showOcrReview(canvas);
 }
 
 // ===== OCR (Tesseract.js) =====
@@ -2309,6 +2388,12 @@ function ocrSnap(retry) {
     showToast('Kamera nie je pripravená — zatvor a otvor skener', 'error');
     return;
   }
+  showOcrReview(canvas);
+}
+
+// Zobrazí zachytenú/načítanú snímku v OCR náhľade + orezový rámik.
+// Spoločné pre odfotenie kamerou (ocrSnap) aj načítanie fotky (loadImageForOcr).
+function showOcrReview(canvas) {
   _ocrCapturedCanvas = canvas;
   const rc = document.getElementById('ocr-review-canvas');
   rc.width = canvas.width;
