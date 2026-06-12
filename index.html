@@ -438,6 +438,17 @@ input[readonly], input:disabled, select:disabled {
   .ocr-crop-handle.right { right: -8px; }
   .ocr-crop-hint { font-size: 11px; color: var(--text-secondary); text-align: center; margin-top: 6px; }
   #ocr-review-controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  /* Zoom živého náhľadu */
+  .scanner-zoom-btn { background: var(--bg-button); color: var(--text-button); border: 1.5px solid var(--border-group); border-radius: 6px; padding: 6px 16px; font-size: 13px; font-weight: bold; cursor: pointer; font-family: Arial, sans-serif; transition: all 0.15s; }
+  .scanner-zoom-btn.active { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
+  /* OCR výsledok — editovateľný pred vložením */
+  #ocr-result-box { margin-top: 10px; text-align: center; }
+  .ocr-result-input { width: 100%; font-family: monospace; font-size: 17px; letter-spacing: 1px; text-align: center; padding: 10px 8px; margin-bottom: 10px; border-radius: 6px; }
+  /* Výber z viacerých nájdených kódov */
+  #barcode-choice { margin-top: 10px; }
+  .barcode-choice-btn { display: block; width: 100%; margin-bottom: 6px; font-family: monospace; font-size: 14px; letter-spacing: 1px; padding: 10px 8px; background: var(--bg-button); color: var(--text-button); border: 1.5px solid var(--border-group); border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+  .barcode-choice-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .barcode-choice-title { font-size: 12px; color: var(--text-secondary); text-align: center; margin-bottom: 6px; }
 
   /* SN INPUT + SCAN BUTTON */
   .sn-row { display: flex; gap: 6px; align-items: stretch; }
@@ -607,11 +618,24 @@ input[readonly], input:disabled, select:disabled {
       <div class="scanner-target-info" id="scanner-target-info"></div>
       <div class="scanner-status" id="scanner-status">Spúšťam kameru...</div>
       <div id="scanner-reader"></div>
-      <div class="ocr-controls" id="scanner-barcode-controls">
-        <button class="btn btn-primary" id="barcode-snap-btn" onclick="barcodeSnapDecode()">📸 Odfotiť kód (ak sa nenačíta sám)</button>
-        <div style="margin-top:8px;"><button class="btn btn-secondary" id="barcode-file-btn" onclick="document.getElementById('scanner-file-input').click()">🖼️ Načítať fotku zo zariadenia</button></div>
+      <div id="scanner-zoom-controls" style="display:none;">
+        <div style="display:flex; gap:6px; justify-content:center; margin-top:8px;">
+          <button class="scanner-zoom-btn active" data-zoom="1" onclick="setScannerZoom(1)">1×</button>
+          <button class="scanner-zoom-btn" data-zoom="2" onclick="setScannerZoom(2)">2×</button>
+          <button class="scanner-zoom-btn" data-zoom="3" onclick="setScannerZoom(3)">3×</button>
+        </div>
+        <div style="font-size:11px; color:var(--text-secondary); text-align:center; margin-top:4px;">💡 Rozmazané? Oddiaľ telefón a priblíž zoomom</div>
       </div>
+      <div class="ocr-controls" id="scanner-barcode-controls">
+        <button class="btn btn-primary" id="barcode-native-btn" onclick="openNativeCamera()">📷 Odfotiť natívnym foťákom</button>
+        <div style="margin-top:8px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+          <button class="btn btn-secondary" id="barcode-snap-btn" onclick="barcodeSnapDecode()">📸 Rýchla snímka</button>
+          <button class="btn btn-secondary" id="barcode-file-btn" onclick="openGalleryPicker()">🖼️ Z galérie</button>
+        </div>
+      </div>
+      <div id="barcode-choice" style="display:none;"></div>
       <input type="file" accept="image/*" id="scanner-file-input" style="display:none;" onchange="onScannerFileChosen(this)">
+      <input type="file" accept="image/*" capture="environment" id="scanner-camera-input" style="display:none;" onchange="onScannerFileChosen(this)">
       <div id="ocr-review" style="display:none;">
         <canvas id="ocr-review-canvas" class="ocr-review-canvas"></canvas>
         <div class="ocr-dim ocr-dim-top" style="display:none;"></div>
@@ -628,8 +652,19 @@ input[readonly], input:disabled, select:disabled {
       <div class="ocr-crop-hint" id="ocr-crop-hint" style="display:none;">Potiahni okraje rámika – ostane len text vnútri</div>
       <div class="ocr-controls" id="scanner-ocr-controls" style="display:none;">
         <div id="ocr-live-controls">
-          <button class="btn btn-primary" id="ocr-snap-btn" onclick="ocrSnap()">📸 Odfotiť</button>
-          <div style="margin-top:8px;"><button class="btn btn-secondary" id="ocr-file-btn" onclick="document.getElementById('scanner-file-input').click()">🖼️ Načítať fotku zo zariadenia</button></div>
+          <button class="btn btn-primary" id="ocr-native-btn" onclick="openNativeCamera()">📷 Odfotiť natívnym foťákom</button>
+          <div style="margin-top:8px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+            <button class="btn btn-secondary" id="ocr-snap-btn" onclick="ocrSnap()">📸 Rýchla snímka</button>
+            <button class="btn btn-secondary" id="ocr-file-btn" onclick="openGalleryPicker()">🖼️ Z galérie</button>
+          </div>
+        </div>
+        <div id="ocr-result-box" style="display:none;">
+          <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px;">Rozpoznaný text — skontroluj a prípadne uprav:</div>
+          <input type="text" id="ocr-result-input" class="ocr-result-input" autocomplete="off" spellcheck="false">
+          <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+            <button class="btn btn-secondary" onclick="ocrResultRetry()">↻ Upraviť orez</button>
+            <button class="btn btn-success" onclick="ocrResultAccept()">✓ Vložiť</button>
+          </div>
         </div>
         <div id="ocr-review-controls" style="display:none;">
           <button class="btn btn-secondary" id="ocr-retake-btn" onclick="ocrRetake()">↻ Odfotiť znova</button>
@@ -1827,6 +1862,8 @@ let _ocrCapturedCanvas = null;// zachytená OCR fotka čakajúca na potvrdenie
 let _crop = null;             // orezový rámik {x,y,w,h} v CSS px náhľadu
 let _cropDrag = null;         // stav ťahania orezového rámika
 let _renderPending = false;   // rAF-batch flag pre plynulé prekresľovanie
+let _scannerZoom = 1;         // aktuálny zoom živého náhľadu
+let _zoomSupported = false;   // kamera podporuje zoom constraint
 
 function openScanner(targetInputId) {
   if (typeof Html5Qrcode === 'undefined' || window.__scannerLibFailed) {
@@ -1843,6 +1880,7 @@ function openScanner(targetInputId) {
   document.getElementById('scanner-tab-ocr').classList.remove('active');
   document.getElementById('scanner-ocr-controls').style.display = 'none';
   document.getElementById('scanner-barcode-controls').style.display = '';
+  hideBarcodeChoice();
   resetOcrReviewUI();
 
   // Info o cieľovom políčku
@@ -1882,6 +1920,7 @@ function setScannerMode(mode) {
   document.getElementById('scanner-tab-ocr').classList.toggle('active', mode === 'ocr');
   document.getElementById('scanner-ocr-controls').style.display = (mode === 'ocr') ? '' : 'none';
   document.getElementById('scanner-barcode-controls').style.display = (mode === 'barcode') ? '' : 'none';
+  hideBarcodeChoice();
   resetOcrReviewUI();
 
   // Reštart kamery v novom režime
@@ -1952,7 +1991,7 @@ function startScannerCamera() {
         .catch(err => {
           setScannerStatus('Nepodarilo sa spustiť kameru: ' + (err?.message || err), 'error');
           const sb = document.getElementById('ocr-snap-btn');
-          if (sb) sb.textContent = '📸 Odfotiť';
+          if (sb) sb.textContent = '📸 Rýchla snímka';
         });
     });
 }
@@ -1961,14 +2000,14 @@ function startScannerCamera() {
 // ťuknutím-zaostriť. Beží AŽ po štarte — nemôže zlomiť spustenie kamery.
 function afterCameraStart() {
   setTimeout(() => {
-    // Snap text späť na "Odfotiť" — kamera je hotová
+    // Snap text späť — kamera je hotová
     const snapBtnNow = document.getElementById('ocr-snap-btn');
-    if (snapBtnNow) snapBtnNow.textContent = '📸 Odfotiť';
+    if (snapBtnNow) snapBtnNow.textContent = '📸 Rýchla snímka';
     // Foto-dekód tlačidlo znova povolíme (mohlo zostať disabled po predošlom pokuse)
     const bSnap = document.getElementById('barcode-snap-btn');
     if (bSnap) bSnap.disabled = false;
     setScannerStatus(_scannerMode === 'ocr'
-      ? 'Namier na štítok a stlač „Odfotiť"'
+      ? 'Odfoť štítok — najlepšie natívnym foťákom 📷'
       : 'Namier kamerou na čiarový alebo QR kód...');
     try {
       const video = document.querySelector('#scanner-reader video');
@@ -1996,10 +2035,35 @@ function afterCameraStart() {
         updateTorchBtn();
       }
 
+      // Zoom: 1×/2×/3× ak kamera podporuje. Trik proti rozmazaniu: kamera má
+      // minimálnu zaostrovaciu vzdialenosť (~10 cm) — oddialením + zoomom
+      // dostaneš rovnaký záber, ale ostrý.
+      _scannerZoom = 1;
+      _zoomSupported = !!(caps.zoom && caps.zoom.max && caps.zoom.max >= 2);
+      const zoomCtrl = document.getElementById('scanner-zoom-controls');
+      if (zoomCtrl) zoomCtrl.style.display = _zoomSupported ? '' : 'none';
+      updateZoomBtns();
+
       // Ťuknutím zaostriť
       setupTapToFocus();
     } catch(e) { /* hardvér nemusí podporovať — pokoj, ostatné funguje */ }
   }, 600);
+}
+
+// ===== ZOOM ŽIVÉHO NÁHĽADU =====
+function setScannerZoom(z) {
+  if (!_scannerTrack) return;
+  const caps = (_scannerTrack.getCapabilities && _scannerTrack.getCapabilities()) || {};
+  if (!caps.zoom) return;
+  const zz = Math.min(Math.max(z, caps.zoom.min || 1), caps.zoom.max || z);
+  _scannerTrack.applyConstraints({ advanced: [{ zoom: zz }] })
+    .then(() => { _scannerZoom = z; updateZoomBtns(); })
+    .catch(() => { showToast('Zoom sa nepodarilo nastaviť', 'error'); });
+}
+function updateZoomBtns() {
+  document.querySelectorAll('.scanner-zoom-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.zoom) === _scannerZoom);
+  });
 }
 
 // ===== BLESK / TORCH =====
@@ -2175,15 +2239,52 @@ async function captureStillBitmap() {
   return null;
 }
 
-// Spustí BarcodeDetector na obrázok/canvas/bitmap; vráti prvý kód alebo null
-async function runBarcodeDetector(img) {
+// Spustí BarcodeDetector na obrázok/canvas/bitmap; vráti VŠETKY nájdené
+// hodnoty (unikátne), zoradené od najdlhšej — SN býva najdlhší alfanumerický kód.
+async function runBarcodeDetectorAll(img) {
   let detector;
   try {
     const fmts = await BarcodeDetector.getSupportedFormats();
     detector = (fmts && fmts.length) ? new BarcodeDetector({ formats: fmts }) : new BarcodeDetector();
   } catch(e) { detector = new BarcodeDetector(); }
   const codes = await detector.detect(img);
-  return (codes && codes.length && codes[0].rawValue) ? codes[0].rawValue : null;
+  const vals = [...new Set((codes || []).map(c => (c.rawValue || '').trim()).filter(Boolean))];
+  vals.sort((a, b) => b.length - a.length);
+  return vals;
+}
+
+// Spracuje výsledok detekcie: 0 kódov → hláška, 1 → rovno vloží,
+// viac → výber (žiadne zakrývanie druhého kódu prstom).
+function handleBarcodeResults(vals, notFoundMsg) {
+  hideBarcodeChoice();
+  if (!vals.length) {
+    setScannerStatus(notFoundMsg, 'error');
+    return false;
+  }
+  vals = vals.slice().sort((a, b) => b.length - a.length); // najdlhší (≈ SN) prvý
+  if (vals.length === 1) {
+    onScanSuccess(vals[0]);
+    return true;
+  }
+  showBarcodeChoice(vals);
+  return true;
+}
+
+function showBarcodeChoice(vals) {
+  const box = document.getElementById('barcode-choice');
+  if (!box) return;
+  box.innerHTML = '<div class="barcode-choice-title">Našiel som ' + vals.length + ' kódy — ťukni na správny:</div>' +
+    vals.map(v => '<button type="button" class="barcode-choice-btn">' + escapeHtml(v) + '</button>').join('');
+  box.querySelectorAll('.barcode-choice-btn').forEach((b, i) => {
+    b.addEventListener('click', () => { hideBarcodeChoice(); onScanSuccess(vals[i]); });
+  });
+  box.style.display = '';
+  setScannerStatus('Vyber správny kód zo zoznamu.');
+}
+
+function hideBarcodeChoice() {
+  const box = document.getElementById('barcode-choice');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
 }
 
 async function barcodeSnapDecode() {
@@ -2201,13 +2302,10 @@ async function barcodeSnapDecode() {
       if (btn) btn.disabled = false;
       return;
     }
-    const code = await runBarcodeDetector(img);
-    if (code) {
-      onScanSuccess(code);  // vyplní políčko + zatvorí
-    } else {
-      setScannerStatus('Kód som nenašiel — priblíž sa, vyrovnaj štítok a nezakrývaj ho prstom.', 'error');
-      if (btn) btn.disabled = false;
-    }
+    const vals = await runBarcodeDetectorAll(img);
+    const ok = handleBarcodeResults(vals, 'Kód som nenašiel — skús „Odfotiť natívnym foťákom" (ostrejšie).');
+    if (!ok && btn) btn.disabled = false;
+    if (ok && btn) btn.disabled = false; // pri multi-výbere ostáva modal otvorený
   } catch(e) {
     setScannerStatus('Čítanie kódu zlyhalo: ' + (e.message || e), 'error');
     if (btn) btn.disabled = false;
@@ -2218,18 +2316,46 @@ async function barcodeSnapDecode() {
 // Natívny fotoaparát zaostruje lepšie než WebView kamera. Fotka z galérie
 // (alebo poslaná kolegom) je ostrá → BarcodeDetector aj OCR čítajú spoľahlivejšie.
 
-// Súbor → bitmap/canvas s rešpektovaním EXIF rotácie + zmenšenie veľkých fotiek
-async function fileToBitmap(file) {
+// Otvorí priamo NATÍVNY fotoaparát (capture=environment) — perfektné ostrenie.
+// Fotka sa po odfotení vráti rovno do appky a spracuje podľa režimu.
+function openNativeCamera() {
+  document.getElementById('scanner-camera-input').click();
+}
+function openGalleryPicker() {
+  document.getElementById('scanner-file-input').click();
+}
+
+// Zrušenie výberu fotky (bez súboru) → oživ živú kameru ak medzitým zomrela
+['scanner-file-input', 'scanner-camera-input'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('cancel', ensureLiveCameraAlive);
+});
+
+// Po návrate z natívneho foťáka/galérie mohol WebView stream zomrieť (appka
+// bola na pozadí). Ak video nedáva obraz, kameru reštartneme.
+function ensureLiveCameraAlive() {
+  if (!document.getElementById('scanner-modal').classList.contains('open')) return;
+  setTimeout(() => {
+    const v = document.querySelector('#scanner-reader video');
+    if (!v || v.readyState < 2) {
+      stopScanner().finally(() => startScannerCamera());
+    }
+  }, 400);
+}
+
+// Súbor → bitmap/canvas s rešpektovaním EXIF rotácie.
+// maxSide: 0 = bez zmenšenia (čiarové kódy potrebujú plný detail!),
+// inak zmenší dlhšiu stranu (OCR nepotrebuje viac a šetrí pamäť/čas).
+async function fileToBitmap(file, maxSide) {
   let bmp;
   try {
     bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
   } catch(e) {
     bmp = await createImageBitmap(file); // staršie prehliadače bez orientácie
   }
-  const MAX = 3000; // dlhšia strana — dosť detailu pre kód aj OCR, šetrí pamäť/čas
   const longSide = Math.max(bmp.width, bmp.height);
-  if (longSide > MAX) {
-    const scale = MAX / longSide;
+  if (maxSide && longSide > maxSide) {
+    const scale = maxSide / longSide;
     const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
@@ -2249,10 +2375,13 @@ async function onScannerFileChosen(input) {
   }
   setScannerStatus('Načítavam fotku...');
   try {
-    const img = await fileToBitmap(file);
     if (_scannerMode === 'ocr') {
+      const img = await fileToBitmap(file, 3000);
       loadImageForOcr(img);            // do orezového rámika → Tesseract
     } else {
+      // Kódy: plné rozlíšenie (cap 4500 len ako pamäťová poistka) — husté
+      // Code128 pri zmenšení strácajú čiary a dekód zlyhá.
+      const img = await fileToBitmap(file, 4500);
       await decodeBarcodeFromFileImage(img);
     }
   } catch(e) {
@@ -2267,11 +2396,12 @@ async function decodeBarcodeFromFileImage(img) {
   }
   setScannerStatus('Čítam kód z fotky...');
   try {
-    const code = await runBarcodeDetector(img);
-    if (code) onScanSuccess(code);
-    else setScannerStatus('V tejto fotke som kód nenašiel. Skús ostrejšiu/bližšiu fotku.', 'error');
+    const vals = await runBarcodeDetectorAll(img);
+    const ok = handleBarcodeResults(vals, 'V tejto fotke som kód nenašiel. Skús ostrejšiu/bližšiu fotku.');
+    if (!ok) ensureLiveCameraAlive(); // neúspech → nech živé skenovanie beží ďalej
   } catch(e) {
     setScannerStatus('Čítanie kódu z fotky zlyhalo: ' + (e.message || e), 'error');
+    ensureLiveCameraAlive();
   }
 }
 
@@ -2282,6 +2412,99 @@ function loadImageForOcr(img) {
   canvas.height = img.height;
   canvas.getContext('2d').drawImage(img, 0, 0);
   showOcrReview(canvas);
+}
+
+// ===== OCR PREDSPRACOVANIE A ČISTENIE =====
+
+// Predspracovanie orezu pre Tesseract: zväčšenie na optimálnu výšku riadku,
+// odtiene sivej, Otsu binarizácia (čisté čierne/biele) + automatická inverzia
+// ak je text svetlý na tmavom + biely okraj. Najväčšia páka na presnosť —
+// rieši odlesky, slabý kontrast a malé písmo.
+function preprocessForOcr(src) {
+  // 1) Mierka: cieľová výška ~150 px (Tesseract optimum pre riadok), max 4×
+  let scale = 1;
+  if (src.height < 150) scale = Math.min(4, 150 / src.height);
+  if (src.width * scale > 2400) scale = Math.max(1, 2400 / src.width);
+  const w = Math.max(1, Math.round(src.width * scale));
+  const h = Math.max(1, Math.round(src.height * scale));
+  const c1 = document.createElement('canvas');
+  c1.width = w; c1.height = h;
+  const x1 = c1.getContext('2d');
+  x1.imageSmoothingEnabled = true;
+  x1.imageSmoothingQuality = 'high';
+  x1.drawImage(src, 0, 0, src.width, src.height, 0, 0, w, h);
+
+  // 2) Grayscale + histogram
+  const img = x1.getImageData(0, 0, w, h);
+  const d = img.data;
+  const hist = new Array(256).fill(0);
+  const gray = new Uint8Array(d.length / 4);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const g = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+    gray[p] = g;
+    hist[g]++;
+  }
+
+  // 3) Otsu prah (maximalizácia medzitriednej variancie)
+  const total = gray.length;
+  let sumAll = 0;
+  for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+  let sumB = 0, wB = 0, maxVar = 0, threshold = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if (v > maxVar) { maxVar = v; threshold = t; }
+  }
+
+  // 4) Binarizácia + polarita: text musí skončiť čierny na bielom
+  let dark = 0;
+  for (let p = 0; p < gray.length; p++) if (gray[p] < threshold) dark++;
+  const invert = dark > gray.length / 2; // väčšina tmavá = tmavé pozadie
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    let v = gray[p] < threshold ? 0 : 255;
+    if (invert) v = 255 - v;
+    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i + 3] = 255;
+  }
+  x1.putImageData(img, 0, 0);
+
+  // 5) Biely okraj okolo (pridaný až PO binarizácii, nech ostane biely)
+  const PAD = 16;
+  const c2 = document.createElement('canvas');
+  c2.width = w + PAD * 2; c2.height = h + PAD * 2;
+  const x2 = c2.getContext('2d');
+  x2.fillStyle = '#fff';
+  x2.fillRect(0, 0, c2.width, c2.height);
+  x2.drawImage(c1, PAD, PAD);
+  return c2;
+}
+
+// Z viacriadkového OCR výstupu vyber riadok, ktorý najviac vyzerá ako SN
+// (sériové čísla vždy obsahujú číslice — "MADE IN CHINA" nie)
+function pickSnLine(rawText) {
+  const lines = (rawText || '').split(/\n+/).map(l => l.replace(/\s+/g, '')).filter(Boolean);
+  if (!lines.length) return '';
+  let best = '', bestScore = -1;
+  for (const l of lines) {
+    const digits = (l.match(/[0-9]/g) || []).length;
+    const score = digits * 2 + l.length;
+    if (score > bestScore) { bestScore = score; best = l; }
+  }
+  return best;
+}
+
+// Čistenie SN: výber správneho riadku + odstránenie "S/N"/"SN" prefixov
+function cleanOcrSn(raw) {
+  let t = pickSnLine(raw).toUpperCase();
+  t = t.replace(/^S\/N:?/, '');
+  if (/^SN.{8,}$/.test(t)) t = t.replace(/^SN/, ''); // holé "SN" len pri dlhom zvyšku
+  t = t.replace(/^[-\/:.]+/, '').replace(/[-\/:.]+$/, '');
+  return t;
 }
 
 // ===== OCR (Tesseract.js) =====
@@ -2320,9 +2543,10 @@ async function getOcrWorker() {
       }
     }
   });
-  // Optimalizácia pre tlačené sériové čísla (jeden riadok, alfanumerika)
+  // Optimalizácia pre tlačené sériové čísla: SN štítky sú VEĽKÉ písmená —
+  // malé v whiteliste spôsobovali zámeny (l↔1, o↔0, hlúposti vo výsledku)
   await _ocrWorker.setParameters({
-    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-/',
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/',
     tessedit_pageseg_mode: '7' // SINGLE_LINE — vhodné pre štítky
   });
   return _ocrWorker;
@@ -2362,9 +2586,11 @@ function resetOcrReviewUI() {
   set('ocr-review-controls', 'none');
   set('ocr-crop-hint', 'none');
   set('ocr-crop-box', 'none');
+  set('ocr-result-box', 'none');
   set('scanner-reader', '');
   set('ocr-live-controls', '');
   set('ocr-progress', 'none');
+  set('scanner-zoom-controls', _zoomSupported ? '' : 'none');
   // Skryjeme aj dim divy okolo orezového rámika
   document.querySelectorAll('#ocr-review .ocr-dim').forEach(d => { d.style.display = 'none'; });
   const snap = document.getElementById('ocr-snap-btn'); if (snap) snap.disabled = false;
@@ -2400,6 +2626,7 @@ function showOcrReview(canvas) {
   rc.height = canvas.height;
   rc.getContext('2d').drawImage(canvas, 0, 0);
   document.getElementById('scanner-reader').style.display = 'none';
+  document.getElementById('scanner-zoom-controls').style.display = 'none';
   document.getElementById('ocr-live-controls').style.display = 'none';
   document.getElementById('ocr-review').style.display = '';
   document.getElementById('ocr-review-controls').style.display = '';
@@ -2413,7 +2640,9 @@ function showOcrReview(canvas) {
 // 2a) Odfotiť znova — zahodí náhľad, späť na živú kameru
 function ocrRetake() {
   resetOcrReviewUI();
-  setScannerStatus('Namier na štítok a stlač „Odfotiť"');
+  setScannerStatus('Odfoť štítok — najlepšie natívnym foťákom 📷');
+  // Po návrate z natívneho foťáka/galérie mohol živý stream zomrieť — oživ
+  ensureLiveCameraAlive();
 }
 
 // 2b) Použiť — pošle potvrdenú fotku do Tesseractu
@@ -2428,33 +2657,72 @@ async function ocrConfirm() {
 
   try {
     const worker = await getOcrWorker();
-    // OCR beží LEN na orezanej časti (alebo na celej fotke ak rámik nie je)
+    // OCR beží LEN na orezanej časti (alebo na celej fotke ak rámik nie je),
+    // po predspracovaní (binarizácia rieši odlesky a slabý kontrast)
     const source = getCroppedCanvas() || _ocrCapturedCanvas;
-    const result = await worker.recognize(source);
-    // Sériové čísla zvyčajne nemajú medzery — zahodíme biele znaky
-    const text = (result?.data?.text || '').replace(/\s+/g, '').trim();
+    const pre = preprocessForOcr(source);
 
-    if (!text) {
-      setScannerStatus('Text sa nepodarilo prečítať — skús odfotiť znova, ostrejšie.', 'error');
-      document.getElementById('ocr-progress').style.display = 'none';
-      if (useBtn) useBtn.disabled = false;
-      if (retakeBtn) retakeBtn.disabled = false;
+    // Pokus 1: jeden riadok textu (PSM 7)
+    await worker.setParameters({ tessedit_pageseg_mode: '7' });
+    const r1 = await worker.recognize(pre);
+    let best = { text: cleanOcrSn(r1?.data?.text), conf: (r1?.data?.confidence) || 0 };
+
+    // Pokus 2 pri slabom výsledku: blok textu (PSM 6) — orez s viac riadkami
+    if (!best.text || best.text.length < 4 || best.conf < 55) {
+      setOcrProgress(0.5, 'Skúšam druhý režim rozpoznania...');
+      await worker.setParameters({ tessedit_pageseg_mode: '6' });
+      const r2 = await worker.recognize(pre);
+      const cand = { text: cleanOcrSn(r2?.data?.text), conf: (r2?.data?.confidence) || 0 };
+      if (cand.text && (cand.text.length > best.text.length || cand.conf > best.conf)) best = cand;
+      await worker.setParameters({ tessedit_pageseg_mode: '7' });
+    }
+
+    document.getElementById('ocr-progress').style.display = 'none';
+    if (useBtn) useBtn.disabled = false;
+    if (retakeBtn) retakeBtn.disabled = false;
+
+    if (!best.text) {
+      setScannerStatus('Text sa nepodarilo prečítať — uprav orez tesnejšie na text alebo odfoť znova.', 'error');
       return;
     }
 
-    const el = document.getElementById(_scannerTargetId);
-    if (el) {
-      el.value = text;
-      skontrolujPolicko(el);
-    }
-    setScannerStatus('✅ Rozpoznané: ' + text + '  (môžeš upraviť v políčku)', 'success');
-    setTimeout(closeScanner, 1000);
+    // Výsledok NEvkladáme rovno — ukážeme na kontrolu/úpravu (žiadne hlúposti v poli)
+    showOcrResult(best.text);
   } catch(e) {
     setScannerStatus('OCR chyba: ' + (e?.message || e), 'error');
     document.getElementById('ocr-progress').style.display = 'none';
     if (useBtn) useBtn.disabled = false;
     if (retakeBtn) retakeBtn.disabled = false;
   }
+}
+
+// Zobrazí rozpoznaný text v editovateľnom poli s tlačidlami Vložiť / Upraviť orez
+function showOcrResult(text) {
+  document.getElementById('ocr-review').style.display = 'none';
+  document.getElementById('ocr-review-controls').style.display = 'none';
+  document.getElementById('ocr-crop-hint').style.display = 'none';
+  document.getElementById('ocr-progress').style.display = 'none';
+  document.getElementById('ocr-result-input').value = text;
+  document.getElementById('ocr-result-box').style.display = '';
+  setScannerStatus('Skontroluj text, uprav ak treba, potom „Vložiť".');
+}
+
+function ocrResultAccept() {
+  const val = (document.getElementById('ocr-result-input').value || '').trim();
+  if (!val) { setScannerStatus('Text je prázdny — uprav ho alebo skús znova.', 'error'); return; }
+  const el = document.getElementById(_scannerTargetId);
+  if (el) { el.value = val; skontrolujPolicko(el); }
+  setScannerStatus('✅ Vložené: ' + val, 'success');
+  setTimeout(closeScanner, 700);
+}
+
+function ocrResultRetry() {
+  // Späť na orezový náhľad s tou istou fotkou — stačí upraviť rámik
+  document.getElementById('ocr-result-box').style.display = 'none';
+  document.getElementById('ocr-review').style.display = '';
+  document.getElementById('ocr-review-controls').style.display = '';
+  document.getElementById('ocr-crop-hint').style.display = '';
+  setScannerStatus('Potiahni okraje rámika len na text, potom „Použiť".');
 }
 // ===== OCR OREZOVÝ RÁMIK =====
 function initCropBox() {
