@@ -44,6 +44,9 @@
   .sidebar-bottom { padding: 12px; border-top: 1px solid #2d3e52; display: flex; flex-direction: column; gap: 8px; }
   .btn-backup { width: 100%; padding: 8px; background: #374151; color: #d1d5db; border: 1px solid #4b5563; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: bold; }
   .btn-backup:hover { background: #4b5563; }
+  .device-label-input { width: 100%; padding: 7px 10px; background: #1f2937; color: #e5e7eb; border: 1px solid #4b5563; border-radius: 6px; font-size: 12px; font-family: Arial, sans-serif; }
+  .device-label-input::placeholder { color: #9ca3af; }
+  .device-label-input:focus { outline: none; border-color: #2563eb; }
 
   /* MAIN */
   .main-content { flex: 1; padding: 24px; overflow-y: auto; min-width: 0; }
@@ -517,6 +520,7 @@ input[readonly], input:disabled, select:disabled {
         📥 Importovať zálohu
         <input type="file" accept=".json" id="import-file-input" style="display:none;" onchange="importBackup(this)">
       </label>
+      <input type="text" id="device-label-input" class="device-label-input" placeholder="📱 Názov zariadenia (napr. Tablet)" oninput="ulozDeviceLabel(this.value)" autocomplete="off">
       <button class="btn-backup" onclick="driveBackup()">☁️ Zálohovať na Google Disk</button>
       <button class="btn-backup" onclick="driveRestore()">⬇️ Obnoviť z Google Disku</button>
     </div>
@@ -888,6 +892,8 @@ window.onload = () => {
   }
 
   updateThemeButton(); // Nastaví ikonku ☀️/🌙 podľa uloženej témy
+  const dlInput = document.getElementById('device-label-input');
+  if (dlInput) dlInput.value = Store.getRaw('mpk_device_label', '');
   renderHistory(); // Najprv vykreslíme bočný panel s históriou
 
   // Pokúsime sa načítať koncept z úložiska
@@ -1334,9 +1340,11 @@ function saveProtocol() {
   setTimeout(() => {
     const data = collectData();
     data.savedAt = new Date().toISOString();
+    data.modifiedAt = Date.now();  // per-record timestamp pre presný merge (fáza 3)
     if (currentId === null) { data.id = Date.now(); protocols.unshift(data); currentId = data.id; }
     else { const i = protocols.findIndex(p => p.id === currentId); data.id = currentId; if (i !== -1) protocols[i] = data; else protocols.unshift(data); }
     const ok = Store.set('mpk_protocols', protocols);
+    if (ok) oznacZmeneny('protocols');
     renderHistory();
     document.getElementById('btn-delete').style.display = '';
 
@@ -1380,18 +1388,86 @@ function deleteProtocol() {
   if (currentId === null || !confirm('Naozaj vymazať protokol?')) return;
   protocols = protocols.filter(p => p.id !== currentId);
   Store.set('mpk_protocols', protocols);
+  oznacZmeneny('protocols');
   currentId = null; newProtocol();
+}
+
+// ===== META / SYNC INFRAŠTRUKTÚRA (Fáza 1) =====
+// mpk_meta sleduje, kedy bol ktorý typ dát naposledy zmenený (ms epoch).
+// Slúži pre budúci multi-device sync (fáza 3). Typy: 'protocols', 'profil'.
+// (Okruh počítadlá cestujú v zálohe spolu s protokolmi — vlastnú dimenziu
+//  nemajú, aby sme sa nedotkli logiky prideľovania okruhu.)
+function nactajMeta() {
+  const m = Store.get('mpk_meta', null);
+  return (m && m.modifiedAt) ? m : { modifiedAt: {} };
+}
+function oznacZmeneny(typ) {
+  const m = nactajMeta();
+  m.modifiedAt[typ] = Date.now();
+  Store.set('mpk_meta', m);
+}
+
+// Názov zariadenia (zobrazí sa v zozname záloh — ktoré zariadenie ju spravilo)
+function ulozDeviceLabel(val) {
+  Store.setRaw('mpk_device_label', (val || '').trim());
+}
+
+// Zostaví kompletnú zálohu (dáta + _meta). Jeden zdroj pravdy pre lokálny
+// .json export aj cloud upload.
+function vytvorDataZalohy() {
+  const meta = nactajMeta();
+  return {
+    version: 1,                          // spätná kompatibilita so starým importom
+    exportedAt: new Date().toISOString(),
+    counter_pov: Store.getRaw('mpk_last_okruh_pov', '0'),
+    counter_bez: Store.getRaw('mpk_last_okruh_bez', '1000'),
+    technik_profil: Store.getRaw('mpk_technik_profil', ''),
+    protocols: protocols,
+    _meta: {
+      modifiedAt: meta.modifiedAt || {},
+      deviceLabel: Store.getRaw('mpk_device_label', ''),
+      exportedAt: Date.now(),
+      schemaVersion: 1
+    }
+  };
+}
+
+// Zapíše zálohu do localStorage (DRY — volá lokálny import aj Drive obnova).
+// Fáza 1 = plný replace (merge príde vo fáze 3). Normalizuje starý plochý
+// formát (bez _meta / bez per-record modifiedAt) na rozumné defaulty.
+function _aplikujZalohu(data) {
+  const list = Array.isArray(data.protocols) ? data.protocols : [];
+  // Každý záznam musí mať modifiedAt (ms). Starý záznam → odvoď z savedAt, inak 0.
+  list.forEach(p => {
+    if (typeof p.modifiedAt !== 'number') {
+      const t = p.savedAt ? Date.parse(p.savedAt) : NaN;
+      p.modifiedAt = isNaN(t) ? 0 : t;
+    }
+  });
+  protocols = list;
+  Store.set('mpk_protocols', protocols);
+
+  if (data.counter_pov != null) Store.setRaw('mpk_last_okruh_pov', data.counter_pov);
+  if (data.counter_bez != null) Store.setRaw('mpk_last_okruh_bez', data.counter_bez);
+  // Profil prepíšeme len ak ho záloha obsahuje (staré zálohy ho nemajú → nemažeme)
+  if (typeof data.technik_profil === 'string') Store.setRaw('mpk_technik_profil', data.technik_profil);
+
+  // Prevezmi _meta.modifiedAt do mpk_meta (pri starej zálohe odvoď z exportedAt)
+  const m = nactajMeta();
+  if (data._meta && data._meta.modifiedAt) {
+    Object.keys(data._meta.modifiedAt).forEach(k => {
+      m.modifiedAt[k] = Math.max(m.modifiedAt[k] || 0, data._meta.modifiedAt[k] || 0);
+    });
+  } else {
+    const t = data.exportedAt ? Date.parse(data.exportedAt) : Date.now();
+    m.modifiedAt.protocols = Math.max(m.modifiedAt.protocols || 0, isNaN(t) ? Date.now() : t);
+  }
+  Store.set('mpk_meta', m);
 }
 
 // ===== BACKUP =====
 function exportBackup() {
-  const backup = {
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    counter_pov: Store.getRaw('mpk_last_okruh_pov', '0'),
-    counter_bez: Store.getRaw('mpk_last_okruh_bez', '1000'),
-    protocols: protocols
-  };
+  const backup = vytvorDataZalohy();
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1410,10 +1486,7 @@ function importBackup(input) {
       const backup = JSON.parse(e.target.result);
       if (!backup.protocols) throw new Error('Neplatný súbor');
       if (!confirm('Importovať zálohu? Aktuálne protokoly budú NAHRADENÉ (' + backup.protocols.length + ' protokolov).')) return;
-      protocols = backup.protocols;
-      Store.set('mpk_protocols', protocols);
-      if (backup.counter_pov) Store.setRaw('mpk_last_okruh_pov', backup.counter_pov);
-      if (backup.counter_bez) Store.setRaw('mpk_last_okruh_bez', backup.counter_bez);
+      _aplikujZalohu(backup);
       newProtocol();
       showToast('📥 Záloha importovaná! (' + protocols.length + ' protokolov)', 'success');
     } catch(err) {
@@ -1558,13 +1631,7 @@ async function driveBackup() {
     showToast('Zálohujem na Disk...');
     const folderId = await driveGetOrCreateFolder();
     const existing = await driveFindBackup(folderId);
-    const backupObj = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      counter_pov: Store.getRaw('mpk_last_okruh_pov', '0'),
-      counter_bez: Store.getRaw('mpk_last_okruh_bez', '1000'),
-      protocols: protocols
-    };
+    const backupObj = vytvorDataZalohy();
     const content = JSON.stringify(backupObj, null, 2);
     const boundary = 'mpk_' + Date.now();
     const meta = existing ? { name: DRIVE_BACKUP_FILENAME } : { name: DRIVE_BACKUP_FILENAME, parents: [folderId] };
@@ -1605,10 +1672,7 @@ async function driveRestore() {
     const backup = await r.json();
     if (!backup || !backup.protocols) throw new Error('Záloha je prázdna alebo poškodená');
     if (!confirm('Obnoviť z Google Disku? Aktuálne protokoly budú NAHRADENÉ (' + backup.protocols.length + ' protokolov zo zálohy).')) return;
-    protocols = backup.protocols;
-    Store.set('mpk_protocols', protocols);
-    if (backup.counter_pov) Store.setRaw('mpk_last_okruh_pov', backup.counter_pov);
-    if (backup.counter_bez) Store.setRaw('mpk_last_okruh_bez', backup.counter_bez);
+    _aplikujZalohu(backup);
     newProtocol();
     showToast('⬇️ Obnovené z Disku (' + protocols.length + ' protokolov)', 'success');
   } catch(e) {
@@ -1667,6 +1731,7 @@ function deleteById(id) {
   if (!confirm('Naozaj vymazať?')) return;
   protocols = protocols.filter(p => p.id !== id);
   Store.set('mpk_protocols', protocols);
+  oznacZmeneny('protocols');
   if (currentId === id) { currentId = null; document.getElementById('btn-delete').style.display = 'none'; }
   renderHistory(); showToast('🗑️ Vymazané');
 }
@@ -1827,6 +1892,7 @@ function closeProfile() {
 function saveProfile() {
   const val = document.getElementById('profile-technik-input').value.trim();
   Store.setRaw('mpk_technik_profil', val);
+  oznacZmeneny('profil');
   closeProfile();
   showToast('👤 Profil uložený', 'success');
   
