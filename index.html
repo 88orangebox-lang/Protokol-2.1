@@ -607,7 +607,7 @@ input[readonly], input:disabled, select:disabled {
 <div class="modal-overlay" id="scanner-modal">
   <div class="modal-box" style="max-width: 520px;">
     <div class="modal-toolbar">
-      <h3>📷 Skenovať sériové číslo</h3>
+      <h3 id="scanner-title">📷 Skenovať / načítať</h3>
       <button class="btn btn-secondary" onclick="closeScanner()">✕ Zavrieť</button>
     </div>
     <div class="scanner-mode-tabs">
@@ -1008,7 +1008,13 @@ function buildGroupHTML(gid, combo, indoorCount, data) {
       <div class="form-grid">
         <div class="form-group"><label>Výrobca zariadenia</label><input type="text" id="vyrobca_${gid}" list="db-vyrobca" placeholder="MDV, Daikin, Mitsubishi..."></div>
         <div class="form-group"></div>
-        <div class="form-group"><label>Model vonkajšej jednotky</label><input type="text" id="ou_model_${gid}" list="db-ou-model" placeholder="MOXG230-12HFN8-QRD6"></div>
+        <div class="form-group">
+          <label>Model vonkajšej jednotky</label>
+          <div class="sn-row">
+            <input type="text" id="ou_model_${gid}" list="db-ou-model" placeholder="MOXG230-12HFN8-QRD6">
+            <button type="button" class="sn-scan-btn" onclick="openScanner('ou_model_${gid}')" title="Skenovať čiarový kód / OCR">📷</button>
+          </div>
+        </div>
         <div class="form-group">
           <label>Sériové číslo</label>
           <div class="sn-row">
@@ -1102,10 +1108,16 @@ function updateOkruhBadge(gid) {
 
 function buildIndoorUnitHTML(gid, i) {
   const snId = 'iu_sn_' + gid + '_' + i;
+  const modelId = 'iu_model_' + gid + '_' + i;
   return '<div class="indoor-unit" id="iu-' + gid + '-' + i + '">' +
     '<div class="indoor-unit-title">🔵 Vnútorná jednotka č. ' + i + '</div>' +
     '<div class="form-grid">' +
-    '<div class="form-group"><label>Model vnútornej jednotky</label><input type="text" id="iu_model_' + gid + '_' + i + '" list="db-iu-model" placeholder="GP-12HRFN8-QRD6"></div>' +
+    '<div class="form-group"><label>Model vnútornej jednotky</label>' +
+      '<div class="sn-row">' +
+        '<input type="text" id="' + modelId + '" list="db-iu-model" placeholder="GP-12HRFN8-QRD6">' +
+        '<button type="button" class="sn-scan-btn" onclick="openScanner(\'' + modelId + '\')" title="Skenovať čiarový kód / OCR">📷</button>' +
+      '</div>' +
+    '</div>' +
     '<div class="form-group"><label>Sériové číslo</label>' +
       '<div class="sn-row">' +
         '<input type="text" id="' + snId + '" placeholder="54VU6643003A...">' +
@@ -1883,14 +1895,17 @@ function openScanner(targetInputId) {
   hideBarcodeChoice();
   resetOcrReviewUI();
 
-  // Info o cieľovom políčku
+  // Info o cieľovom políčku (funguje pre SN aj Model, vonkajšiu aj vnútornú)
   const targetEl = document.getElementById(targetInputId);
   const groupEl = targetEl?.closest('.klima-group');
   const groupTitle = groupEl?.querySelector('.kg-title')?.textContent || '';
-  const labelText = targetEl?.closest('.form-group')?.querySelector('label')?.textContent || 'sériové číslo';
-  const isOu = targetInputId.startsWith('ou_sn_');
+  const labelText = targetEl?.closest('.form-group')?.querySelector('label')?.textContent || 'údaj';
+  const isOu = targetInputId.startsWith('ou_'); // ou_sn_ aj ou_model_
   document.getElementById('scanner-target-info').textContent =
     '→ ' + groupTitle + ' · ' + (isOu ? 'vonkajšia jednotka' : 'vnútorná jednotka') + ' · ' + labelText;
+  // Titulok modálu podľa toho, čo načítavame
+  const titleEl = document.getElementById('scanner-title');
+  if (titleEl) titleEl.textContent = '📷 Načítať: ' + labelText;
 
   document.getElementById('scanner-modal').classList.add('open');
   startScannerCamera();
