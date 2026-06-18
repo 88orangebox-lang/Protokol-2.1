@@ -1371,7 +1371,7 @@ function saveProtocol() {
 }
 function newProtocol() {
   currentId = null;
-  document.querySelectorAll('#form-section input:not([type="checkbox"]):not([type="date"])').forEach(el => el.value = '');
+  document.querySelectorAll('#form-section input:not([type="checkbox"]):not([type="date"]):not(#device-label-input)').forEach(el => el.value = '');
   document.querySelectorAll('#form-section textarea').forEach(el => el.value = '');
   document.getElementById('spustenie_ok').checked = false;
   document.getElementById('spustenie_problem').checked = false;
@@ -2940,6 +2940,8 @@ if ('serviceWorker' in navigator) {
 function skontrolujPolicko(el) {
   // Ignorujeme políčka "readonly" (Číslo okruhu a pod.), o tie sa postaralo CSS
   if (el.hasAttribute('readonly') || el.hasAttribute('disabled')) return;
+  // Názov zariadenia je nastavenie, nie pole protokolu — žiadna zelená fajka
+  if (el.id === 'device-label-input') { el.classList.remove('vyplnene'); return; }
   
   // Ak je políčko reálne vyplnené textom, prepneme ho na modro
   if (el.value.trim() !== '') {
