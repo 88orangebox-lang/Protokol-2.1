@@ -173,6 +173,11 @@
   .cloud-status.cs-expired { background: #dc2626; animation: cloudPulse 1.2s ease-in-out infinite; }
   @keyframes cloudPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.6); } 50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); } }
 
+  /* KONFLIKT VOĽBY */
+  .konflikt-choice { display: block; width: 100%; text-align: left; margin-bottom: 8px; padding: 12px 14px; font-size: 13px; }
+  .konflikt-choice .konflikt-sub { display: block; font-weight: normal; font-size: 11px; opacity: 0.85; margin-top: 2px; }
+  .konflikt-choice.konflikt-default { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* =======================================================
    FAREBNÉ TÉMY: TMAVÁ (default) / SVETLÁ (pre slnko)
    PDF (@media print, #proto-modal-content) ostáva nedotknutý.
@@ -636,6 +641,25 @@ input[readonly], input:disabled, select:disabled {
   </div>
 </div>
 
+<!-- 3-WAY KONFLIKT SYNC -->
+<div class="modal-overlay" id="konflikt-modal">
+  <div class="modal-box" style="max-width: 460px;">
+    <div class="modal-toolbar">
+      <h3>🔀 Konflikt zálohy</h3>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:6px;">
+        Toto aj iné zariadenie spravili zmeny od poslednej synchronizácie. Ako pokračovať?
+      </p>
+      <div id="konflikt-info" style="font-size:12px; color:var(--text-secondary); margin-bottom:14px;"></div>
+      <button class="btn btn-success konflikt-choice konflikt-default" id="konflikt-merge-btn" onclick="konfliktVyber('merge')">🔗 Spojiť oboje <span class="konflikt-sub">(odporúčané — nič sa nestratí)</span></button>
+      <button class="btn btn-secondary konflikt-choice" id="konflikt-cloud-btn" onclick="konfliktVyber('cloud')">⬇️ Použiť verziu z cloudu <span class="konflikt-sub">(zahodí lokálne zmeny)</span></button>
+      <button class="btn btn-secondary konflikt-choice" onclick="konfliktVyber('local')">⬆️ Použiť lokálnu verziu <span class="konflikt-sub">(prepíše cloud)</span></button>
+      <button class="btn btn-secondary konflikt-choice" onclick="konfliktVyber('neskor')">🕒 Rozhodnúť neskôr</button>
+    </div>
+  </div>
+</div>
+
 <!-- SCANNER MODAL (čiarový/QR kód + OCR) -->
 <div class="modal-overlay" id="scanner-modal">
   <div class="modal-box" style="max-width: 520px;">
@@ -929,6 +953,12 @@ window.onload = () => {
   if (jeDrivePouzivatel()) setCloudStatus(_maPlatnyToken() ? 'ok' : 'expired');
 
   renderHistory(); // Najprv vykreslíme bočný panel s históriou
+
+  // Pull-on-open: po štarte (ak je platný token) ticho zosynchronizuj.
+  // Žiadny popup pri štarte (popup blocker) — len ak token ešte platí.
+  if (navigator.onLine && jeDrivePouzivatel() && _maPlatnyToken()) {
+    setTimeout(() => { _synchronizuj(); }, 800);
+  }
 
   // Pokúsime sa načítať koncept z úložiska
   const draft = Store.get('mpk_draft', null);
@@ -1439,6 +1469,7 @@ function oznacZmeneny(typ) {
   const m = nactajMeta();
   m.modifiedAt[typ] = Date.now();
   Store.set('mpk_meta', m);
+  if (typeof _naplanujAutoPush === 'function') _naplanujAutoPush(); // auto-push (debounce)
 }
 
 // Názov zariadenia (zobrazí sa v zozname záloh — ktoré zariadenie ju spravilo)
@@ -1690,7 +1721,29 @@ async function _driveVycistiStareZalohy(folderId, keep) {
   } catch(e) { /* failsafe */ }
 }
 
-// ☁️ ZÁLOHOVAŤ — vytvorí NOVÝ verzovaný súbor (nič neprepisuje) + cleanup
+// Nahrá daný dátový objekt ako nový verzovaný súbor + cleanup (zdieľané jadro).
+async function _pushDataNaDisk(dataObj) {
+  const folderId = await driveGetOrCreateFolder();
+  const content = JSON.stringify(dataObj, null, 2);
+  const deviceLabel = Store.getRaw('mpk_device_label', '');
+  const boundary = 'mpk_' + Date.now();
+  const meta = { name: _driveBackupFilename(), parents: [folderId], description: deviceLabel, mimeType: 'application/json' };
+  const body =
+    '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
+    JSON.stringify(meta) + '\r\n' +
+    '--' + boundary + '\r\nContent-Type: application/json\r\n\r\n' +
+    content + '\r\n--' + boundary + '--';
+  const r = await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
+    body: body
+  });
+  if (!r.ok) throw new Error('Drive odpovedal ' + r.status);
+  Store.setRaw('mpk_drive_last', new Date().toISOString());
+  _driveVycistiStareZalohy(folderId, 20); // fire-and-forget
+}
+
+// ☁️ ZÁLOHOVAŤ TERAZ — manuálny push aktuálneho stavu (nový verzovaný súbor)
 async function driveBackup() {
   if (!navigator.onLine) { showToast('☁️ Google Disk potrebuje internet', 'error'); return; }
 
@@ -1703,29 +1756,141 @@ async function driveBackup() {
   try {
     showToast('Prihlasujem na Google...');
     await ensureDriveToken();
+    setCloudStatus('pushing');
     showToast('Zálohujem na Disk...');
-    const folderId = await driveGetOrCreateFolder();
-    const backupObj = vytvorDataZalohy();
-    const content = JSON.stringify(backupObj, null, 2);
-    const deviceLabel = Store.getRaw('mpk_device_label', '');
-    const boundary = 'mpk_' + Date.now();
-    const meta = { name: _driveBackupFilename(), parents: [folderId], description: deviceLabel, mimeType: 'application/json' };
-    const body =
-      '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
-      JSON.stringify(meta) + '\r\n' +
-      '--' + boundary + '\r\nContent-Type: application/json\r\n\r\n' +
-      content + '\r\n--' + boundary + '--';
-    const r = await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-      method: 'POST',
-      headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
-      body: body
-    });
-    if (!r.ok) throw new Error('Drive odpovedal ' + r.status);
-    Store.setRaw('mpk_drive_last', new Date().toISOString());
+    await _pushDataNaDisk(vytvorDataZalohy());
+    setLastSync(Date.now());
+    setCloudStatus('ok');
     showToast('☁️ Záloha vytvorená (' + count + ' protokolov)', 'success');
-    _driveVycistiStareZalohy(folderId, 20); // fire-and-forget
   } catch(e) {
+    setCloudStatus('error');
     showToast('❌ Záloha zlyhala: ' + (e.message || e), 'error');
+  }
+}
+
+// ===== SYNC ENGINE (Fáza 3b) =====
+let _syncBezi = false;
+
+function softReload() {
+  // Re-render UI bez location.reload — rozrobený formulár ostáva nedotknutý
+  renderHistory();
+}
+
+// Stiahne najnovšiu cloud zálohu (alebo null)
+async function _stiahniNajnovsiCloud(folderId) {
+  const newest = await _driveNajdiNajnovsiSubor(folderId);
+  if (!newest) return null;
+  const r = await driveApi('https://www.googleapis.com/drive/v3/files/' + newest.id + '?alt=media');
+  if (!r.ok) return null;
+  return await r.json();
+}
+
+// Jadro synchronizácie podľa rozhodovacej matice (3f). Tichá — žiadny popup.
+// Volá auto-push aj pull-on-open.
+async function _synchronizuj() {
+  if (_syncBezi) return;
+  if (document.getElementById('konflikt-modal').classList.contains('open')) return;
+  if (!navigator.onLine || !jeDrivePouzivatel()) return;
+  if (!_maPlatnyToken()) { setCloudStatus('expired'); return; }
+
+  _syncBezi = true;
+  try {
+    setCloudStatus('pulling');
+    const folderId = await driveGetOrCreateFolder();
+    const cloudData = await _stiahniNajnovsiCloud(folderId);
+    const cmp = _porovnajMeta(cloudData || {});
+
+    if (cloudData && cmp.cloudZmenaOdSync && cmp.localZmenaOdSync) {
+      // oboje zmenené → KONFLIKT
+      setCloudStatus('pending');
+      otvorKonflikt(cloudData);
+    } else if (cloudData && cmp.cloudZmenaOdSync) {
+      // len cloud → silent pull + soft reload
+      _aplikujZalohu(cloudData);
+      setLastSync(Date.now());
+      softReload();
+      setCloudStatus('ok');
+      showToast('⬇️ Stiahnuté novšie dáta z cloudu', 'success');
+    } else if (cmp.localZmenaOdSync || !cloudData) {
+      // len lokál (alebo cloud ešte prázdny) → push
+      setCloudStatus('pushing');
+      await _pushDataNaDisk(vytvorDataZalohy());
+      setLastSync(Date.now());
+      setCloudStatus('ok');
+    } else {
+      setCloudStatus('ok'); // nič netreba
+    }
+  } catch(e) {
+    setCloudStatus('error');
+  } finally {
+    _syncBezi = false;
+  }
+}
+
+// Auto-push: po zmene naplánuj push (debounce 10 min, max-wait 1 h poistka)
+let _autoPushTimer = null;
+let _autoPushFirst = 0;
+function _naplanujAutoPush() {
+  if (!jeDrivePouzivatel()) return;
+  const now = Date.now();
+  if (!_autoPushFirst) _autoPushFirst = now;
+  if (_autoPushTimer) clearTimeout(_autoPushTimer);
+  const maxWaitLeft = (_autoPushFirst + 3600000) - now;          // strop 1 h od prvej zmeny
+  const delay = Math.max(0, Math.min(600000, maxWaitLeft));       // 10 min alebo zvyšok do 1 h
+  setCloudStatus('pending');
+  _autoPushTimer = setTimeout(() => {
+    _autoPushTimer = null; _autoPushFirst = 0;
+    _synchronizuj();
+  }, delay);
+}
+
+// ===== 3-WAY KONFLIKT DIALÓG =====
+let _konfliktCloud = null;
+function otvorKonflikt(cloudData) {
+  _konfliktCloud = cloudData;
+  const localCount = protocols.length;
+  const cloudCount = (cloudData.protocols || []).length;
+  const info = document.getElementById('konflikt-info');
+  if (info) info.textContent = 'Lokálne zariadenie: ' + localCount + ' protokolov · Cloud: ' + cloudCount + ' protokolov';
+  // Default odporúčanie: zvýrazni "Spojiť", okrem prázdneho lokálu → "Stiahnuť cloud"
+  const merge = document.getElementById('konflikt-merge-btn');
+  const cloud = document.getElementById('konflikt-cloud-btn');
+  if (merge && cloud) {
+    const emptyLocal = localCount === 0;
+    merge.classList.toggle('konflikt-default', !emptyLocal);
+    cloud.classList.toggle('konflikt-default', emptyLocal);
+  }
+  document.getElementById('konflikt-modal').classList.add('open');
+}
+function closeKonflikt() { document.getElementById('konflikt-modal').classList.remove('open'); }
+
+async function konfliktVyber(volba) {
+  const cloud = _konfliktCloud;
+  if (!cloud) { closeKonflikt(); return; }
+  if (volba === 'neskor') { closeKonflikt(); setCloudStatus('pending'); return; }
+  const local = vytvorDataZalohy();
+  closeKonflikt();
+  try {
+    setCloudStatus('pushing');
+    if (volba === 'merge') {
+      const merged = _zlucZalohy(local, cloud);
+      _aplikujZalohu(merged);
+      await _pushDataNaDisk(merged);
+    } else if (volba === 'cloud') {
+      _aplikujZalohu(cloud);
+      // cloud sme prijali — netreba push (cloud je už zdroj)
+    } else if (volba === 'local') {
+      await _pushDataNaDisk(local);
+    }
+    setLastSync(Date.now());
+    softReload();
+    setCloudStatus('ok');
+    showToast('✅ Konflikt vyriešený (' + (volba === 'merge' ? 'spojené' : volba === 'cloud' ? 'cloud' : 'lokálne') + ')', 'success');
+  } catch(e) {
+    setCloudStatus('error');
+    showToast('❌ ' + (e.message || e), 'error');
+  } finally {
+    _konfliktCloud = null;
   }
 }
 
