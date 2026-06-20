@@ -164,6 +164,15 @@
   .toast.error { background: #dc2626; }
   .toast.warning { background: #d97706; }
 
+  /* CLOUD STATUS INDIKÁTOR */
+  .cloud-status { position: fixed; bottom: 16px; left: 16px; z-index: 9998; min-width: 34px; height: 34px; padding: 0 10px; border-radius: 18px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.3); user-select: none; color: #fff; }
+  .cloud-status.cs-ok { background: #16a34a; }
+  .cloud-status.cs-pending { background: #d97706; }
+  .cloud-status.cs-busy { background: #2563eb; }
+  .cloud-status.cs-error { background: #dc2626; }
+  .cloud-status.cs-expired { background: #dc2626; animation: cloudPulse 1.2s ease-in-out infinite; }
+  @keyframes cloudPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.6); } 50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); } }
+
 /* =======================================================
    FAREBNÉ TÉMY: TMAVÁ (default) / SVETLÁ (pre slnko)
    PDF (@media print, #proto-modal-content) ostáva nedotknutý.
@@ -598,6 +607,7 @@ input[readonly], input:disabled, select:disabled {
   </div>
 </div>
 <div class="toast" id="toast"></div>
+<div id="cloud-status" class="cloud-status" style="display:none;" onclick="cloudStatusClick()"></div>
 <div class="modal-overlay" id="profile-modal">
   <div class="modal-box" style="max-width: 400px;">
     <div class="modal-toolbar">
@@ -913,6 +923,11 @@ window.onload = () => {
   updateThemeButton(); // Nastaví ikonku ☀️/🌙 podľa uloženej témy
   const dlInput = document.getElementById('device-label-input');
   if (dlInput) dlInput.value = Store.getRaw('mpk_device_label', '');
+
+  // Cloud sync: načítaj uložený token a nastav stavový indikátor (len Drive používateľ)
+  nactajUlozenyToken();
+  if (jeDrivePouzivatel()) setCloudStatus(_maPlatnyToken() ? 'ok' : 'expired');
+
   renderHistory(); // Najprv vykreslíme bočný panel s históriou
 
   // Pokúsime sa načítať koncept z úložiska
@@ -1577,8 +1592,11 @@ function ensureDriveToken() {
               _driveToken = resp.access_token;
               // expires_in je v sekundách (~3600); uložíme čas expirácie
               _driveTokenExpiry = Date.now() + ((parseInt(resp.expires_in) || 3600) * 1000);
+              // Persistuj token, aby po reštarte appky fungoval pull-on-open bez popupu
+              Store.set('mpk_drive_token', { token: _driveToken, expiresAt: _driveTokenExpiry });
               // Email = signál "Drive používateľ" (uloží sa raz, prežíva expiráciu)
               if (!Store.getRaw('mpk_drive_email', '')) _driveFetchEmail();
+              if (typeof setCloudStatus === 'function') setCloudStatus('ok');
               if (p) p.resolve(resp.access_token);
             } else if (p) p.reject(new Error('Prihlásenie zlyhalo'));
           },
@@ -1600,7 +1618,12 @@ function driveApi(url, opts) {
   opts = opts || {};
   opts.headers = Object.assign({}, opts.headers || {}, { 'Authorization': 'Bearer ' + _driveToken });
   return fetch(url, opts).then(r => {
-    if (r.status === 401) { _driveToken = null; throw new Error('Prihlásenie vypršalo — skús znova'); }
+    if (r.status === 401) {
+      _driveToken = null; _driveTokenExpiry = 0;
+      Store.set('mpk_drive_token', null);  // vyčisti aj uložený token
+      if (typeof setCloudStatus === 'function') setCloudStatus('expired');
+      throw new Error('Prihlásenie vypršalo — skús znova');
+    }
     return r;
   });
 }
@@ -1759,6 +1782,106 @@ async function driveRestoreFile(f) {
   } catch(e) {
     setDriveListStatus('❌ ' + (e.message || e));
   }
+}
+
+// ===== CLOUD SYNC — PRIMITÍVA (Fáza 3a) =====
+// Token sa persistuje (mpk_drive_token), aby po reštarte appky fungoval
+// pull-on-open bez popupu. Žiadne auto-push/pull tu ešte nie je zapojené.
+
+function nactajUlozenyToken() {
+  const tk = Store.get('mpk_drive_token', null);
+  if (tk && tk.token && tk.expiresAt) { _driveToken = tk.token; _driveTokenExpiry = tk.expiresAt; }
+}
+function _maPlatnyToken() { return !!_driveToken && Date.now() < _driveTokenExpiry - 60000; }
+function jeDrivePouzivatel() { return !!Store.getRaw('mpk_drive_email', ''); }
+
+// lastSync = referenčný bod „kedy som naposledy úplne zosynchronizoval"
+function getLastSync() { return parseInt(Store.getRaw('mpk_last_sync_ms', '0')) || 0; }
+function setLastSync(ms) { Store.setRaw('mpk_last_sync_ms', String(ms || Date.now())); }
+
+function _maxModifiedAt(metaObj) {
+  if (!metaObj || !metaObj.modifiedAt) return 0;
+  const vals = Object.keys(metaObj.modifiedAt).map(k => +metaObj.modifiedAt[k] || 0);
+  return vals.length ? Math.max.apply(null, vals) : 0;
+}
+
+// Porovná cloud zálohu s lokálom voči lastSync. KĽÚČOVÉ: bez lastSync (len
+// cloud_max > local_max) by detekcia konfliktu zlyhala, keď jedno zariadenie
+// ešte nepulllo.
+function _porovnajMeta(cloudData) {
+  const lastSync = getLastSync();
+  const localMax = _maxModifiedAt(nactajMeta());
+  const cloudMax = _maxModifiedAt(cloudData && cloudData._meta);
+  return {
+    lastSync, localMax, cloudMax,
+    cloudZmenaOdSync: cloudMax > lastSync,
+    localZmenaOdSync: localMax > lastSync
+  };
+}
+
+// 3-way merge dvoch záloh. Záznamové kolekcie (protocols) = per-record union
+// podľa id (vyšší modifiedAt vyhráva → nič sa nestratí). Jednoduché objekty
+// (profil) = novšia verzia podľa meta. Počítadlá okruhu = max.
+function _zlucZalohy(localData, cloudData) {
+  const byId = {};
+  const pridaj = (arr) => (arr || []).forEach(p => {
+    const id = (p.id != null) ? p.id : ('nokey_' + Math.random());
+    const m = (typeof p.modifiedAt === 'number') ? p.modifiedAt
+      : (p.savedAt ? (Date.parse(p.savedAt) || 0) : 0);
+    if (!byId[id] || m >= (byId[id]._m || 0)) byId[id] = Object.assign({}, p, { _m: m });
+  });
+  pridaj(localData.protocols);
+  pridaj(cloudData.protocols);
+  const merged = Object.keys(byId).map(k => { const c = Object.assign({}, byId[k]); delete c._m; return c; })
+    .sort((a, b) => (b.modifiedAt || 0) - (a.modifiedAt || 0));
+
+  const maxCounter = (a, b, def) => {
+    const na = parseInt(a), nb = parseInt(b);
+    return String(Math.max(isNaN(na) ? def : na, isNaN(nb) ? def : nb));
+  };
+
+  const lm = (localData._meta && localData._meta.modifiedAt) || {};
+  const cm = (cloudData._meta && cloudData._meta.modifiedAt) || {};
+  const profil = ((cm.profil || 0) > (lm.profil || 0))
+    ? (typeof cloudData.technik_profil === 'string' ? cloudData.technik_profil : (localData.technik_profil || ''))
+    : (typeof localData.technik_profil === 'string' ? localData.technik_profil : (cloudData.technik_profil || ''));
+
+  const mm = {};
+  Object.keys(lm).concat(Object.keys(cm)).forEach(k => { mm[k] = Math.max(lm[k] || 0, cm[k] || 0); });
+
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    counter_pov: maxCounter(localData.counter_pov, cloudData.counter_pov, 0),
+    counter_bez: maxCounter(localData.counter_bez, cloudData.counter_bez, 1000),
+    technik_profil: profil,
+    protocols: merged,
+    _meta: { modifiedAt: mm, deviceLabel: Store.getRaw('mpk_device_label', ''), exportedAt: Date.now(), schemaVersion: 1 }
+  };
+}
+
+// Cloud status indikátor v rohu. logged-out / nie-Drive-používateľ = skrytý.
+function setCloudStatus(state) {
+  const el = document.getElementById('cloud-status');
+  if (!el) return;
+  if (!jeDrivePouzivatel() || state === 'logged-out') { el.style.display = 'none'; return; }
+  const map = {
+    ok:      { t: '☁︎', c: 'cs-ok',      title: 'Cloud záloha je aktuálna' },
+    pending: { t: '☁︎…', c: 'cs-pending', title: 'Čaká sa na zálohu' },
+    pushing: { t: '☁︎↑', c: 'cs-busy',    title: 'Zálohujem na Disk…' },
+    pulling: { t: '☁︎↓', c: 'cs-busy',    title: 'Sťahujem z Disku…' },
+    error:   { t: '☁︎✕', c: 'cs-error',   title: 'Chyba cloud zálohy' },
+    expired: { t: '⚠︎',  c: 'cs-expired', title: 'Prihlásenie vypršalo — klikni pre obnovu' }
+  };
+  const s = map[state] || map.ok;
+  el.style.display = '';
+  el.textContent = s.t;
+  el.className = 'cloud-status ' + s.c;
+  el.title = s.title;
+}
+function cloudStatusClick() {
+  // Vo fáze 4 tu bude re-auth pri 'expired'. Zatiaľ otvor zoznam záloh.
+  openDriveList();
 }
 
 // ===== HISTORY =====
