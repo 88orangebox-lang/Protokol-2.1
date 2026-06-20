@@ -47,6 +47,11 @@
   .device-label-input { width: 100%; padding: 7px 10px; background: #1f2937; color: #e5e7eb; border: 1px solid #4b5563; border-radius: 6px; font-size: 12px; font-family: Arial, sans-serif; }
   .device-label-input::placeholder { color: #9ca3af; }
   .device-label-input:focus { outline: none; border-color: #2563eb; }
+  /* Zoznam cloud záloh */
+  .drive-list-item { display: block; width: 100%; text-align: left; margin-bottom: 8px; padding: 12px 14px; background: var(--bg-button); color: var(--text-primary); border: 1.5px solid var(--border-group); border-radius: 8px; cursor: pointer; transition: all 0.15s; font-family: Arial, sans-serif; }
+  .drive-list-item:hover { border-color: var(--accent); }
+  .dli-date { font-weight: bold; font-size: 14px; }
+  .dli-meta { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 
   /* MAIN */
   .main-content { flex: 1; padding: 24px; overflow-y: auto; min-width: 0; }
@@ -522,7 +527,7 @@ input[readonly], input:disabled, select:disabled {
       </label>
       <input type="text" id="device-label-input" class="device-label-input" placeholder="📱 Názov zariadenia (napr. Tablet)" oninput="ulozDeviceLabel(this.value)" autocomplete="off">
       <button class="btn-backup" onclick="driveBackup()">☁️ Zálohovať na Google Disk</button>
-      <button class="btn-backup" onclick="driveRestore()">⬇️ Obnoviť z Google Disku</button>
+      <button class="btn-backup" onclick="openDriveList()">⬇️ Obnoviť z Google Disku</button>
     </div>
   </div>
 
@@ -603,6 +608,20 @@ input[readonly], input:disabled, select:disabled {
       <label>Meno a číslo osvedčenia (Predvolené)</label>
       <input type="text" id="profile-technik-input" placeholder="Napr. Ing. Peter Mihajľ, 6292" style="width: 100%; margin-top: 5px; box-sizing: border-box; padding: 8px; border: 1.5px solid #e2e8f0; border-radius: 6px;">
       <button class="btn btn-primary" style="margin-top: 15px; width: 100%;" onclick="saveProfile()">💾 Uložiť profil</button>
+    </div>
+  </div>
+</div>
+
+<!-- ZOZNAM CLOUD ZÁLOH -->
+<div class="modal-overlay" id="drive-list-modal">
+  <div class="modal-box" style="max-width: 560px;">
+    <div class="modal-toolbar">
+      <h3>☁️ Zálohy na Google Disku</h3>
+      <button class="btn btn-secondary" onclick="closeDriveList()">✕ Zavrieť</button>
+    </div>
+    <div class="modal-body">
+      <div id="drive-list-status" class="scanner-status"></div>
+      <div id="drive-list-items"></div>
     </div>
   </div>
 </div>
@@ -1504,9 +1523,12 @@ function importBackup(input) {
 // localStorage/Store ostáva primárne úložisko — toto je len vrstva navrch
 // a používa rovnaký tvar dát ako export/import (chránená zóna nedotknutá).
 const GOOGLE_CLIENT_ID = '202425125014-f6hpubt5uvoul65oa2ktnci0uaas8o1t.apps.googleusercontent.com';
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+// drive.file = vlastné súbory; userinfo.email = email prihláseného (signál
+// "toto je Drive používateľ" — potrebné pre sync stav a výstrahy vo fázach 3/4)
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email';
 const DRIVE_FOLDER_NAME = 'MP Komfort - Protokol zalohy';
-const DRIVE_BACKUP_FILENAME = 'mpkomfort_zaloha.json';
+const DRIVE_BACKUP_PREFIX = 'mpkomfort_zaloha_';       // verzované súbory
+const DRIVE_BACKUP_FILENAME = 'mpkomfort_zaloha.json'; // starý 1-súborový formát (kvôli spätnej kompat.)
 
 let _gisTokenClient = null;
 let _driveToken = null;
@@ -1555,6 +1577,8 @@ function ensureDriveToken() {
               _driveToken = resp.access_token;
               // expires_in je v sekundách (~3600); uložíme čas expirácie
               _driveTokenExpiry = Date.now() + ((parseInt(resp.expires_in) || 3600) * 1000);
+              // Email = signál "Drive používateľ" (uloží sa raz, prežíva expiráciu)
+              if (!Store.getRaw('mpk_drive_email', '')) _driveFetchEmail();
               if (p) p.resolve(resp.access_token);
             } else if (p) p.reject(new Error('Prihlásenie zlyhalo'));
           },
@@ -1596,33 +1620,61 @@ async function driveGetOrCreateFolder() {
   return cd.id;
 }
 
-// Nájde existujúci súbor zálohy v priečinku (alebo null)
-async function driveFindBackup(folderId) {
-  const q = "name='" + DRIVE_BACKUP_FILENAME + "' and '" + folderId + "' in parents and trashed=false";
-  const r = await driveApi('https://www.googleapis.com/drive/v3/files?spaces=drive&fields=files(id,name,modifiedTime)&q=' + encodeURIComponent(q));
-  const d = await r.json();
-  return (d.files && d.files[0]) || null;
+// Stiahne a uloží email prihláseného používateľa (best-effort)
+async function _driveFetchEmail() {
+  try {
+    const r = await driveApi('https://www.googleapis.com/oauth2/v3/userinfo');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d && d.email) Store.setRaw('mpk_drive_email', d.email);
+  } catch(e) { /* nevadí — email doplníme nabudúce */ }
 }
 
-// ☁️ ZÁLOHOVAŤ — nahrá/prepíše jeden JSON súbor v Drive priečinku
+// Názov verzovaného súboru zálohy: mpkomfort_zaloha_RRRR-MM-DD_HH-MM-SS.json
+function _driveBackupFilename() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return DRIVE_BACKUP_PREFIX + d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) +
+    '_' + p(d.getHours()) + '-' + p(d.getMinutes()) + '-' + p(d.getSeconds()) + '.json';
+}
+
+// Zoznam všetkých záloh v priečinku, zoradené od najnovšej
+async function _driveListBackups(folderId) {
+  const q = "'" + folderId + "' in parents and trashed=false and mimeType='application/json'";
+  const url = 'https://www.googleapis.com/drive/v3/files?spaces=drive' +
+    '&q=' + encodeURIComponent(q) +
+    '&orderBy=' + encodeURIComponent('modifiedTime desc') +
+    '&fields=' + encodeURIComponent('files(id,name,modifiedTime,size,description)') +
+    '&pageSize=100';
+  const r = await driveApi(url);
+  const d = await r.json();
+  return d.files || [];
+}
+
+// Najnovšia záloha (pre sync pull vo fáze 3 aj rýchlu obnovu)
+async function _driveNajdiNajnovsiSubor(folderId) {
+  const files = await _driveListBackups(folderId);
+  return files[0] || null;
+}
+
+// Zmaže staré zálohy nad posledných `keep` (default 20). Failsafe — chyby ignoruj.
+async function _driveVycistiStareZalohy(folderId, keep) {
+  keep = keep || 20;
+  try {
+    const files = await _driveListBackups(folderId); // už zoradené desc
+    for (const f of files.slice(keep)) {
+      try { await driveApi('https://www.googleapis.com/drive/v3/files/' + f.id, { method: 'DELETE' }); } catch(e) {}
+    }
+  } catch(e) { /* failsafe */ }
+}
+
+// ☁️ ZÁLOHOVAŤ — vytvorí NOVÝ verzovaný súbor (nič neprepisuje) + cleanup
 async function driveBackup() {
   if (!navigator.onLine) { showToast('☁️ Google Disk potrebuje internet', 'error'); return; }
 
-  // Potvrdenie pred prepísaním — nová záloha NAHRADÍ pôvodnú a nedá sa vrátiť.
-  // Ak zálohuješ prázdny stav (0 protokolov), zvlášť silné varovanie —
-  // presne to zabráni omylu typu "prepísal som dobrú zálohu prázdnou".
   const count = protocols.length;
-  let confirmMsg;
-  if (count === 0) {
-    confirmMsg = '⚠️ POZOR — žiadne protokoly!\n\n' +
-      'Práve nemáš uložený ani jeden protokol (0).\n\n' +
-      'Ak budeš pokračovať, PREPÍŠEŠ existujúcu zálohu na Google Disku PRÁZDNOU zálohou ' +
-      'a pôvodnú už NEBUDE možné vrátiť späť.\n\n' +
-      'Naozaj chceš zálohovať prázdny stav?';
-  } else {
-    confirmMsg = 'Zálohovať ' + count + ' protokol(ov) na Google Disk?\n\n' +
-      'Nová záloha PREPÍŠE pôvodnú zálohu na Disku — túto akciu NIE JE možné vrátiť späť.';
-  }
+  const confirmMsg = (count === 0)
+    ? '⚠️ Práve nemáš žiadny protokol (0).\n\nNaozaj vytvoriť prázdnu zálohu na Google Disku?'
+    : 'Vytvoriť novú zálohu na Google Disku (' + count + ' protokolov)?\n\n(Predošlé zálohy ostávajú — nič sa neprepisuje.)';
   if (!confirm(confirmMsg)) return;
 
   try {
@@ -1630,53 +1682,82 @@ async function driveBackup() {
     await ensureDriveToken();
     showToast('Zálohujem na Disk...');
     const folderId = await driveGetOrCreateFolder();
-    const existing = await driveFindBackup(folderId);
     const backupObj = vytvorDataZalohy();
     const content = JSON.stringify(backupObj, null, 2);
+    const deviceLabel = Store.getRaw('mpk_device_label', '');
     const boundary = 'mpk_' + Date.now();
-    const meta = existing ? { name: DRIVE_BACKUP_FILENAME } : { name: DRIVE_BACKUP_FILENAME, parents: [folderId] };
+    const meta = { name: _driveBackupFilename(), parents: [folderId], description: deviceLabel, mimeType: 'application/json' };
     const body =
       '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' +
       JSON.stringify(meta) + '\r\n' +
       '--' + boundary + '\r\nContent-Type: application/json\r\n\r\n' +
       content + '\r\n--' + boundary + '--';
-    const url = existing
-      ? 'https://www.googleapis.com/upload/drive/v3/files/' + existing.id + '?uploadType=multipart'
-      : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-    const r = await driveApi(url, {
-      method: existing ? 'PATCH' : 'POST',
+    const r = await driveApi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
       headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
       body: body
     });
     if (!r.ok) throw new Error('Drive odpovedal ' + r.status);
     Store.setRaw('mpk_drive_last', new Date().toISOString());
-    showToast('☁️ Zálohované na Google Disk (' + (protocols.length) + ' protokolov)', 'success');
+    showToast('☁️ Záloha vytvorená (' + count + ' protokolov)', 'success');
+    _driveVycistiStareZalohy(folderId, 20); // fire-and-forget
   } catch(e) {
     showToast('❌ Záloha zlyhala: ' + (e.message || e), 'error');
   }
 }
 
-// ⬇️ OBNOVIŤ — stiahne JSON z Drive a načíta (s potvrdením). Rovnaká cesta
-// ako importBackup — Store.set + počítadlá + newProtocol.
-async function driveRestore() {
+// ⬇️ OBNOVIŤ — otvorí ZOZNAM záloh na Disku, z ktorého si vyberieš
+async function openDriveList() {
   if (!navigator.onLine) { showToast('☁️ Google Disk potrebuje internet', 'error'); return; }
+  document.getElementById('drive-list-items').innerHTML = '';
+  setDriveListStatus('Prihlasujem na Google...');
+  document.getElementById('drive-list-modal').classList.add('open');
   try {
-    showToast('Prihlasujem na Google...');
     await ensureDriveToken();
-    showToast('Hľadám zálohu na Disku...');
+    setDriveListStatus('Načítavam zoznam záloh...');
     const folderId = await driveGetOrCreateFolder();
-    const existing = await driveFindBackup(folderId);
-    if (!existing) { showToast('Na Disku zatiaľ nie je žiadna záloha', 'error'); return; }
-    const r = await driveApi('https://www.googleapis.com/drive/v3/files/' + existing.id + '?alt=media');
+    const files = await _driveListBackups(folderId);
+    renderDriveList(files);
+  } catch(e) {
+    setDriveListStatus('❌ ' + (e.message || e));
+  }
+}
+function closeDriveList() { document.getElementById('drive-list-modal').classList.remove('open'); }
+function setDriveListStatus(t) { const e = document.getElementById('drive-list-status'); if (e) e.textContent = t || ''; }
+
+function renderDriveList(files) {
+  const box = document.getElementById('drive-list-items');
+  if (!files || !files.length) { setDriveListStatus('Na Disku zatiaľ nie je žiadna záloha.'); box.innerHTML = ''; return; }
+  setDriveListStatus('Ťukni na zálohu, ktorú chceš obnoviť:');
+  box.innerHTML = files.map((f, i) => {
+    const dt = f.modifiedTime ? new Date(f.modifiedTime).toLocaleString('sk-SK') : f.name;
+    const label = f.description ? escapeHtml(f.description) : '—';
+    const kb = f.size ? Math.max(1, Math.round(parseInt(f.size) / 1024)) + ' kB' : '';
+    return '<button type="button" class="drive-list-item" data-i="' + i + '">' +
+      '<div class="dli-date">🕒 ' + dt + '</div>' +
+      '<div class="dli-meta">📱 ' + label + (kb ? ' · ' + kb : '') + '</div>' +
+    '</button>';
+  }).join('');
+  box.querySelectorAll('.drive-list-item').forEach(btn => {
+    btn.addEventListener('click', () => driveRestoreFile(files[parseInt(btn.dataset.i)]));
+  });
+}
+
+async function driveRestoreFile(f) {
+  const dt = f.modifiedTime ? new Date(f.modifiedTime).toLocaleString('sk-SK') : f.name;
+  if (!confirm('Obnoviť zálohu z ' + dt + '?\n\nAktuálne dáta budú NAHRADENÉ obsahom tejto zálohy.')) return;
+  try {
+    setDriveListStatus('Sťahujem zálohu...');
+    const r = await driveApi('https://www.googleapis.com/drive/v3/files/' + f.id + '?alt=media');
     if (!r.ok) throw new Error('Drive odpovedal ' + r.status);
     const backup = await r.json();
     if (!backup || !backup.protocols) throw new Error('Záloha je prázdna alebo poškodená');
-    if (!confirm('Obnoviť z Google Disku? Aktuálne protokoly budú NAHRADENÉ (' + backup.protocols.length + ' protokolov zo zálohy).')) return;
     _aplikujZalohu(backup);
     newProtocol();
-    showToast('⬇️ Obnovené z Disku (' + protocols.length + ' protokolov)', 'success');
+    closeDriveList();
+    showToast('⬇️ Obnovené z Disku (' + backup.protocols.length + ' protokolov)', 'success');
   } catch(e) {
-    showToast('❌ Obnova zlyhala: ' + (e.message || e), 'error');
+    setDriveListStatus('❌ ' + (e.message || e));
   }
 }
 
