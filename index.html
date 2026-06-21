@@ -840,6 +840,12 @@ let protocols = Store.get('mpk_protocols', []);
 let currentId = null;
 let klimaCounter = 0;
 
+// Tombstones: zmazaný protokol ostáva v poli s deleted:true (aby sa zmazanie
+// prenieslo cez sync a merge ho nevzkriesil). Na zobrazenie/počítanie používame
+// len "živé" protokoly. Sync/merge (vytvorDataZalohy, _zlucZalohy) pracujú s
+// CELÝM poľom vrátane tombstones.
+function ziveProtokoly() { return protocols.filter(p => p && p.deleted !== true); }
+
 // Legacy counter stubs kept for backup import compatibility
 function getCounter(type) { return type === 'povinnost' ? 0 : 1000; }
 function setCounter(type, val) { /* no-op, counters now derived from form */ }
@@ -935,7 +941,7 @@ window.onload = () => {
     if (Store.available) {
       statusEl.style.background = '#14532d';
       statusEl.style.color = '#86efac';
-      statusEl.textContent = '✅ Ukladanie funguje (' + protocols.length + ' protokolov)';
+      statusEl.textContent = '✅ Ukladanie funguje (' + ziveProtokoly().length + ' protokolov)';
     } else {
       statusEl.style.background = '#7f1d1d';
       statusEl.style.color = '#fca5a5';
@@ -1450,7 +1456,9 @@ function newProtocol() {
 }
 function deleteProtocol() {
   if (currentId === null || !confirm('Naozaj vymazať protokol?')) return;
-  protocols = protocols.filter(p => p.id !== currentId);
+  // Soft-delete (tombstone) — ostáva v poli, aby sa zmazanie prenieslo cez sync
+  const p = protocols.find(x => x.id === currentId);
+  if (p) { p.deleted = true; p.modifiedAt = Date.now(); }
   Store.set('mpk_protocols', protocols);
   oznacZmeneny('protocols');
   currentId = null; newProtocol();
@@ -1553,7 +1561,7 @@ function importBackup(input) {
       if (!confirm('Importovať zálohu? Aktuálne protokoly budú NAHRADENÉ (' + backup.protocols.length + ' protokolov).')) return;
       _aplikujZalohu(backup);
       newProtocol();
-      showToast('📥 Záloha importovaná! (' + protocols.length + ' protokolov)', 'success');
+      showToast('📥 Záloha importovaná! (' + ziveProtokoly().length + ' protokolov)', 'success');
     } catch(err) {
       showToast('❌ Chyba: ' + err.message, 'error');
     }
@@ -1747,7 +1755,7 @@ async function _pushDataNaDisk(dataObj) {
 async function driveBackup() {
   if (!navigator.onLine) { showToast('☁️ Google Disk potrebuje internet', 'error'); return; }
 
-  const count = protocols.length;
+  const count = ziveProtokoly().length;
   const confirmMsg = (count === 0)
     ? '⚠️ Práve nemáš žiadny protokol (0).\n\nNaozaj vytvoriť prázdnu zálohu na Google Disku?'
     : 'Vytvoriť novú zálohu na Google Disku (' + count + ' protokolov)?\n\n(Predošlé zálohy ostávajú — nič sa neprepisuje.)';
@@ -1883,8 +1891,8 @@ function _naplanujAutoPush() {
 let _konfliktCloud = null;
 function otvorKonflikt(cloudData) {
   _konfliktCloud = cloudData;
-  const localCount = protocols.length;
-  const cloudCount = (cloudData.protocols || []).length;
+  const localCount = ziveProtokoly().length;
+  const cloudCount = (cloudData.protocols || []).filter(p => p && p.deleted !== true).length;
   const cloudLabel = (cloudData._meta && cloudData._meta.deviceLabel) || 'iné zariadenie';
   const localLabel = Store.getRaw('mpk_device_label', '') || 'toto zariadenie';
   const cloudTime = (cloudData._meta && cloudData._meta.exportedAt)
@@ -2103,7 +2111,8 @@ function renderHistory() {
   const searchEl = document.getElementById('history-search');
   const filter = searchEl ? searchEl.value.trim().toLowerCase() : '';
 
-  const matches = !filter ? protocols : protocols.filter(p =>
+  const zive = ziveProtokoly(); // bez tombstones
+  const matches = !filter ? zive : zive.filter(p =>
     (p.cislo_zakazky || '').toLowerCase().includes(filter) ||
     (p.zakaznik || '').toLowerCase().includes(filter) ||
     (p.miesto_instalacie || '').toLowerCase().includes(filter)
@@ -2130,7 +2139,7 @@ function renderHistory() {
 
   const statusEl = document.getElementById('storage-status');
   if (statusEl && Store.available) {
-    statusEl.textContent = '✅ Ukladanie funguje (' + protocols.length + ' protokolov)';
+    statusEl.textContent = '✅ Ukladanie funguje (' + zive.length + ' protokolov)';
   }
   updateDeviceDatabase();
 }
@@ -2144,7 +2153,9 @@ function loadById(id) {
 }
 function deleteById(id) {
   if (!confirm('Naozaj vymazať?')) return;
-  protocols = protocols.filter(p => p.id !== id);
+  // Soft-delete (tombstone)
+  const p = protocols.find(x => x.id === id);
+  if (p) { p.deleted = true; p.modifiedAt = Date.now(); }
   Store.set('mpk_protocols', protocols);
   oznacZmeneny('protocols');
   if (currentId === id) { currentId = null; document.getElementById('btn-delete').style.display = 'none'; }
@@ -2323,7 +2334,7 @@ function updateDeviceDatabase() {
   const ouModely = new Set();
   const iuModely = new Set();
 
-  protocols.forEach(p => {
+  ziveProtokoly().forEach(p => {
     (p.klimaGroups || []).forEach(g => {
       if (g.vyrobca) vyrobcovia.add(g.vyrobca);
       if (g.ou_model) ouModely.add(g.ou_model);
