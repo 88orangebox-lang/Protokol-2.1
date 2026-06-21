@@ -641,6 +641,23 @@ input[readonly], input:disabled, select:disabled {
   </div>
 </div>
 
+<!-- VÝSTRAHA: CLOUD ODPOJENÝ -->
+<div class="modal-overlay" id="drive-expired-modal">
+  <div class="modal-box" style="max-width: 420px;">
+    <div class="modal-toolbar">
+      <h3>⚠️ Cloud záloha je odpojená</h3>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px;">
+        Prihlásenie do Google Disku vypršalo. Zmeny sa zatiaľ ukladajú len v tomto
+        zariadení a <b>nesynchronizujú sa</b>. Prihlás sa znova, nech je záloha aktuálna.
+      </p>
+      <button class="btn btn-success" style="width:100%; margin-bottom:8px;" onclick="cloudReconnect()">🔑 Prihlásiť sa</button>
+      <button class="btn btn-secondary" style="width:100%;" onclick="closeDriveExpired()">Neskôr</button>
+    </div>
+  </div>
+</div>
+
 <!-- 3-WAY KONFLIKT SYNC -->
 <div class="modal-overlay" id="konflikt-modal">
   <div class="modal-box" style="max-width: 460px;">
@@ -964,7 +981,13 @@ window.onload = () => {
   // Žiadny popup pri štarte (popup blocker) — len ak token ešte platí.
   if (navigator.onLine && jeDrivePouzivatel() && _maPlatnyToken()) {
     setTimeout(() => { _synchronizuj(); }, 800);
+  } else if (jeDrivePouzivatel() && !_maPlatnyToken()) {
+    // Token vypršal → výstraha (1-klik obnova). Žiadny auto-popup (blocker).
+    setTimeout(showDriveExpired, 600);
   }
+  // Po preloade GIS priprav token client, nech predlžovanie tokenu (A) funguje
+  // aj po reštarte appky (z kliknutí).
+  if (jeDrivePouzivatel()) loadGis().then(() => _ensureTokenClient()).catch(() => {});
 
   // Pokúsime sa načítať koncept z úložiska
   const draft = Store.get('mpk_draft', null);
@@ -1613,43 +1636,80 @@ function loadGis() {
 // BEZ akéhokoľvek popupu/výberu účtu. Až po expirácii pýtame nový.
 // (Statická appka bez backendu nedostane "refresh token" — 1 h je strop, ktorý
 //  Google dáva prehliadačovým appkám z bezpečnostných dôvodov.)
+// Vytvorí GIS token client (raz). Vráti true ak je k dispozícii.
+function _ensureTokenClient() {
+  if (_gisTokenClient) return true;
+  if (!(window.google && window.google.accounts && window.google.accounts.oauth2)) return false;
+  _gisTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: DRIVE_SCOPE,
+    callback: (resp) => {
+      const p = _tokenPending; _tokenPending = null;
+      if (resp && resp.access_token) {
+        _driveToken = resp.access_token;
+        _driveTokenExpiry = Date.now() + ((parseInt(resp.expires_in) || 3600) * 1000);
+        Store.set('mpk_drive_token', { token: _driveToken, expiresAt: _driveTokenExpiry });
+        if (!Store.getRaw('mpk_drive_email', '')) _driveFetchEmail();
+        if (typeof setCloudStatus === 'function') setCloudStatus('ok');
+        if (p) p.resolve(resp.access_token);
+      } else if (p) p.reject(new Error('Prihlásenie zlyhalo'));
+    },
+    error_callback: () => {
+      const p = _tokenPending; _tokenPending = null;
+      if (p) p.reject(new Error('Prihlásenie bolo zrušené'));
+    }
+  });
+  return true;
+}
+
+// Access token s cachovaním: kým je token platný (~1 h), znova ho použijeme
+// BEZ akéhokoľvek popupu/výberu účtu. Až po expirácii pýtame nový.
 function ensureDriveToken() {
   return new Promise((resolve, reject) => {
-    // Platný token v pamäti (s 60 s rezervou) → použijeme ho, žiadne UI
     if (_driveToken && Date.now() < _driveTokenExpiry - 60000) {
       return resolve(_driveToken);
     }
     loadGis().then(() => {
+      _ensureTokenClient();
       _tokenPending = { resolve, reject };
-      if (!_gisTokenClient) {
-        _gisTokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
-          scope: DRIVE_SCOPE,
-          callback: (resp) => {
-            const p = _tokenPending; _tokenPending = null;
-            if (resp && resp.access_token) {
-              _driveToken = resp.access_token;
-              // expires_in je v sekundách (~3600); uložíme čas expirácie
-              _driveTokenExpiry = Date.now() + ((parseInt(resp.expires_in) || 3600) * 1000);
-              // Persistuj token, aby po reštarte appky fungoval pull-on-open bez popupu
-              Store.set('mpk_drive_token', { token: _driveToken, expiresAt: _driveTokenExpiry });
-              // Email = signál "Drive používateľ" (uloží sa raz, prežíva expiráciu)
-              if (!Store.getRaw('mpk_drive_email', '')) _driveFetchEmail();
-              if (typeof setCloudStatus === 'function') setCloudStatus('ok');
-              if (p) p.resolve(resp.access_token);
-            } else if (p) p.reject(new Error('Prihlásenie zlyhalo'));
-          },
-          error_callback: () => {
-            const p = _tokenPending; _tokenPending = null;
-            if (p) p.reject(new Error('Prihlásenie bolo zrušené'));
-          }
-        });
-      }
       try {
         _gisTokenClient.requestAccessToken({ prompt: '' });
       } catch(e) { _tokenPending = null; reject(e); }
     }).catch(reject);
   });
+}
+
+// ===== FÁZA 4 — DRŽANIE PRIHLÁSENIA =====
+// A) Predlžovanie tokenu počas práce: na kliknutiach (capture, throttle 1×/min),
+//    kým token EŠTE platí ale vyprší o <10 min, ticho ho predĺž. Beží z user
+//    gesture → popup blocker neprekáža. Keď už vypršal → NIČ (žiadne okná).
+let _lastTokenCheck = 0;
+function _obnovDriveTokenAkTreba() {
+  if (!jeDrivePouzivatel()) return;
+  const now = Date.now();
+  if (now - _lastTokenCheck < 60000) return; // throttle 1×/min
+  _lastTokenCheck = now;
+  if (_driveToken && _driveTokenExpiry > now && (_driveTokenExpiry - now) < 600000) {
+    if (!_ensureTokenClient()) return;
+    _tokenPending = { resolve: () => {}, reject: () => {} }; // ticho
+    try { _gisTokenClient.requestAccessToken({ prompt: '' }); } catch(e) { _tokenPending = null; }
+  }
+}
+document.addEventListener('click', _obnovDriveTokenAkTreba, true);
+
+// C) Obnova prihlásenia (z user gesture — tlačidlo/indikátor). Interaktívne.
+async function cloudReconnect() {
+  closeDriveExpired();
+  try {
+    showToast('Prihlasujem na Google...');
+    await ensureDriveToken();
+    setCloudStatus('ok');
+    showToast('☁️ Cloud znova pripojený', 'success');
+    _synchronizuj(); // pull-on-open po obnove
+  } catch(e) {
+    setCloudStatus('expired');
+    showToast('❌ Prihlásenie zlyhalo', 'error');
+  }
 }
 
 // Autorizovaný fetch na Drive (401 = vypršaný token → vyžiada nový nabudúce)
@@ -2099,8 +2159,19 @@ function setCloudStatus(state) {
   el.title = s.title;
 }
 function cloudStatusClick() {
-  // Vo fáze 4 tu bude re-auth pri 'expired'. Zatiaľ otvor zoznam záloh.
-  openDriveList();
+  // Pri vypršaní → obnova prihlásenia; inak otvor zoznam záloh.
+  if (_driveToken && Date.now() < _driveTokenExpiry - 60000) { openDriveList(); }
+  else { cloudReconnect(); }
+}
+
+// Výstražný modál „Cloud záloha odpojená" — pri štarte ak token vypršal.
+function showDriveExpired() {
+  const m = document.getElementById('drive-expired-modal');
+  if (m) m.classList.add('open');
+}
+function closeDriveExpired() {
+  const m = document.getElementById('drive-expired-modal');
+  if (m) m.classList.remove('open');
 }
 
 // ===== HISTORY =====
