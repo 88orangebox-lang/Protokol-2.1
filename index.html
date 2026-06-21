@@ -431,8 +431,8 @@ input[readonly], input:disabled, select:disabled {
   .scanner-tab { flex: 1; padding: 10px 8px; background: transparent; color: var(--text-secondary); border: none; border-bottom: 2px solid transparent; cursor: pointer; font-size: 13px; font-weight: bold; font-family: Arial, sans-serif; transition: all 0.15s; }
   .scanner-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .scanner-tab:hover:not(.active) { background: var(--bg-button); color: var(--text-primary); }
-  #scanner-reader { width: 100%; min-height: 240px; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
-  #scanner-reader video { width: 100% !important; height: auto !important; display: block; }
+  #scanner-reader { width: 100%; min-height: 200px; max-height: 42vh; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
+  #scanner-reader video { width: 100% !important; height: auto !important; max-height: 42vh; object-fit: cover; display: block; }
   .focus-ring { position: absolute; width: 60px; height: 60px; margin: -30px 0 0 -30px; border: 2px solid #fff; border-radius: 50%; pointer-events: none; z-index: 6; box-shadow: 0 0 4px rgba(0,0,0,0.6); animation: focusRingAnim 0.8s ease-out forwards; }
   @keyframes focusRingAnim { 0% { transform: scale(1.5); opacity: 0; } 25% { opacity: 1; } 100% { transform: scale(1); opacity: 0; } }
   .scanner-status { margin-bottom: 10px; font-size: 12px; color: var(--text-secondary); text-align: center; min-height: 18px; }
@@ -703,7 +703,6 @@ input[readonly], input:disabled, select:disabled {
       <div class="ocr-controls" id="scanner-barcode-controls">
         <button class="btn btn-primary" id="barcode-native-btn" onclick="openNativeCamera()">📷 Odfotiť natívnym foťákom</button>
         <div style="margin-top:8px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-          <button class="btn btn-secondary" id="barcode-snap-btn" onclick="barcodeSnapDecode()">📸 Rýchla snímka</button>
           <button class="btn btn-secondary" id="barcode-file-btn" onclick="openGalleryPicker()">🖼️ Z galérie</button>
         </div>
       </div>
@@ -728,7 +727,6 @@ input[readonly], input:disabled, select:disabled {
         <div id="ocr-live-controls">
           <button class="btn btn-primary" id="ocr-native-btn" onclick="openNativeCamera()">📷 Odfotiť natívnym foťákom</button>
           <div style="margin-top:8px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-            <button class="btn btn-secondary" id="ocr-snap-btn" onclick="ocrSnap()">📸 Rýchla snímka</button>
             <button class="btn btn-secondary" id="ocr-file-btn" onclick="openGalleryPicker()">🖼️ Z galérie</button>
           </div>
         </div>
@@ -2499,11 +2497,20 @@ function setScannerMode(mode) {
   document.getElementById('scanner-ocr-controls').style.display = (mode === 'ocr') ? '' : 'none';
   document.getElementById('scanner-barcode-controls').style.display = (mode === 'barcode') ? '' : 'none';
   hideBarcodeChoice();
+  torchOff();
   resetOcrReviewUI();
 
-  // Reštart kamery v novom režime
-  torchOff();
-  stopScanner().finally(() => startScannerCamera());
+  if (mode === 'barcode') {
+    // Živá čítačka kódov
+    document.getElementById('scanner-reader').style.display = '';
+    stopScanner().finally(() => startScannerCamera());
+  } else {
+    // OCR = bez živej kamery (zbytočné/rozmazané WebView). Len natívny foťák / galéria.
+    document.getElementById('scanner-reader').style.display = 'none';
+    document.getElementById('scanner-zoom-controls').style.display = 'none';
+    stopScanner();
+    setScannerStatus('Odfoť štítok natívnym foťákom 📷 alebo vyber z galérie.');
+  }
 }
 
 function setScannerStatus(msg, cls='') {
@@ -2903,6 +2910,23 @@ function openGalleryPicker() {
   document.getElementById('scanner-file-input').click();
 }
 
+// Uloží fotku do zariadenia (Stiahnuté súbory — Android ich ukazuje v galérii/Súboroch),
+// aby sa k odfotenému štítku dalo neskôr vrátiť.
+function _ulozFotkuDoZariadenia(file) {
+  try {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    const ext = (file.type && file.type.indexOf('png') >= 0) ? 'png' : 'jpg';
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.href = url;
+    a.download = 'protokol_stitok_' + stamp + '.' + ext;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { try { document.body.removeChild(a); URL.revokeObjectURL(url); } catch(e) {} }, 1500);
+    showToast('📷 Fotka uložená do zariadenia', 'success');
+  } catch(e) { /* uloženie je bonus — neblokuj čítanie */ }
+}
+
 // Zrušenie výberu fotky (bez súboru) → oživ živú kameru ak medzitým zomrela
 ['scanner-file-input', 'scanner-camera-input'].forEach(id => {
   const el = document.getElementById(id);
@@ -2945,12 +2969,16 @@ async function fileToBitmap(file, maxSide) {
 
 async function onScannerFileChosen(input) {
   const file = input.files && input.files[0];
+  const zFotaku = (input.id === 'scanner-camera-input'); // natívny foťák vs galéria
   input.value = ''; // reset, nech sa dá vybrať ten istý súbor znova
   if (!file) return;
   if (!file.type || file.type.indexOf('image/') !== 0) {
     setScannerStatus('Vyber prosím obrázok (fotku).', 'error');
     return;
   }
+  // Fotku z natívneho foťáka rovno ulož do zariadenia (galérii ju netreba — už tam je).
+  // Robí sa hneď v gesture kontexte (change event), nech prehliadač sťahovanie povolí.
+  if (zFotaku) _ulozFotkuDoZariadenia(file);
   setScannerStatus('Načítavam fotku...');
   try {
     if (_scannerMode === 'ocr') {
@@ -3165,10 +3193,12 @@ function resetOcrReviewUI() {
   set('ocr-crop-hint', 'none');
   set('ocr-crop-box', 'none');
   set('ocr-result-box', 'none');
-  set('scanner-reader', '');
   set('ocr-live-controls', '');
   set('ocr-progress', 'none');
-  set('scanner-zoom-controls', _zoomSupported ? '' : 'none');
+  // Živá kamera + zoom len v barcode režime; OCR ich nemá
+  const barcodeMode = (_scannerMode === 'barcode');
+  set('scanner-reader', barcodeMode ? '' : 'none');
+  set('scanner-zoom-controls', (barcodeMode && _zoomSupported) ? '' : 'none');
   // Skryjeme aj dim divy okolo orezového rámika
   document.querySelectorAll('#ocr-review .ocr-dim').forEach(d => { d.style.display = 'none'; });
   const snap = document.getElementById('ocr-snap-btn'); if (snap) snap.disabled = false;
@@ -3218,9 +3248,7 @@ function showOcrReview(canvas) {
 // 2a) Odfotiť znova — zahodí náhľad, späť na živú kameru
 function ocrRetake() {
   resetOcrReviewUI();
-  setScannerStatus('Odfoť štítok — najlepšie natívnym foťákom 📷');
-  // Po návrate z natívneho foťáka/galérie mohol živý stream zomrieť — oživ
-  ensureLiveCameraAlive();
+  setScannerStatus('Odfoť štítok natívnym foťákom 📷 alebo vyber z galérie.');
 }
 
 // 2b) Použiť — pošle potvrdenú fotku do Tesseractu
