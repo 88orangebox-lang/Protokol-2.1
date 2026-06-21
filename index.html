@@ -447,8 +447,8 @@ input[readonly], input:disabled, select:disabled {
   .scanner-torch-btn { background: var(--bg-button); color: var(--text-button); border: 1.5px solid var(--border-group); border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; cursor: pointer; font-family: Arial, sans-serif; transition: all 0.15s; }
   .scanner-torch-btn:hover { border-color: var(--accent); }
   .scanner-torch-btn.torch-on { background: #f59e0b; color: #1a1a1a; border-color: #f59e0b; }
-  #ocr-review { width: 100%; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
-  .ocr-review-canvas { width: 100%; height: auto; display: block; }
+  #ocr-review { width: fit-content; max-width: 100%; margin: 0 auto; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
+  .ocr-review-canvas { display: block; }
   #ocr-crop-box { position: absolute; border: 2px solid #fff; box-sizing: border-box; cursor: move; touch-action: none; }
   .ocr-dim { position: absolute; background: rgba(0,0,0,0.55); pointer-events: none; }
   .ocr-crop-handle { position: absolute; background: var(--accent); border: 2px solid #fff; box-sizing: border-box; touch-action: none; }
@@ -3228,11 +3228,17 @@ function ocrSnap(retry) {
 // Zobrazí zachytenú/načítanú snímku v OCR náhľade + orezový rámik.
 // Spoločné pre odfotenie kamerou (ocrSnap) aj načítanie fotky (loadImageForOcr).
 function showOcrReview(canvas) {
-  _ocrCapturedCanvas = canvas;
+  _ocrCapturedCanvas = canvas; // PLNÉ rozlíšenie ostáva pre OCR (orez sa berie z neho)
   const rc = document.getElementById('ocr-review-canvas');
-  rc.width = canvas.width;
-  rc.height = canvas.height;
-  rc.getContext('2d').drawImage(canvas, 0, 0);
+  // Náhľad zobrazíme zmenšený tak, aby sa zmestil na šírku aj výšku (max 45vh),
+  // nech tlačidlá Použiť/Odfotiť znova ostanú viditeľné bez rolovania.
+  const mb = document.querySelector('#scanner-modal .modal-body');
+  const maxW = Math.max(160, Math.min((mb && mb.clientWidth) || 460, 520));
+  const maxH = Math.max(160, Math.round(window.innerHeight * 0.45));
+  const scale = Math.min(maxW / canvas.width, maxH / canvas.height, 1); // neup-scalujeme
+  rc.width = Math.max(1, Math.round(canvas.width * scale));
+  rc.height = Math.max(1, Math.round(canvas.height * scale));
+  rc.getContext('2d').drawImage(canvas, 0, 0, rc.width, rc.height);
   document.getElementById('scanner-reader').style.display = 'none';
   document.getElementById('scanner-zoom-controls').style.display = 'none';
   document.getElementById('ocr-live-controls').style.display = 'none';
