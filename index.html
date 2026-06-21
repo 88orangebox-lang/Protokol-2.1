@@ -652,9 +652,9 @@ input[readonly], input:disabled, select:disabled {
         Toto aj iné zariadenie spravili zmeny od poslednej synchronizácie. Ako pokračovať?
       </p>
       <div id="konflikt-info" style="font-size:12px; color:var(--text-secondary); margin-bottom:14px;"></div>
-      <button class="btn btn-success konflikt-choice konflikt-default" id="konflikt-merge-btn" onclick="konfliktVyber('merge')">🔗 Spojiť oboje <span class="konflikt-sub">(odporúčané — nič sa nestratí)</span></button>
-      <button class="btn btn-secondary konflikt-choice" id="konflikt-cloud-btn" onclick="konfliktVyber('cloud')">⬇️ Použiť verziu z cloudu <span class="konflikt-sub">(zahodí lokálne zmeny)</span></button>
-      <button class="btn btn-secondary konflikt-choice" onclick="konfliktVyber('local')">⬆️ Použiť lokálnu verziu <span class="konflikt-sub">(prepíše cloud)</span></button>
+      <button class="btn btn-success konflikt-choice konflikt-default" id="konflikt-merge-btn" onclick="konfliktVyber('merge')">🔗 Spojiť oboje <span class="konflikt-sub">odporúčané — nič sa nestratí</span></button>
+      <button class="btn btn-secondary konflikt-choice" id="konflikt-cloud-btn" onclick="konfliktVyber('cloud')">⬇️ Použiť verziu z cloudu <span class="konflikt-sub" id="konflikt-cloud-sub"></span></button>
+      <button class="btn btn-secondary konflikt-choice" id="konflikt-local-btn" onclick="konfliktVyber('local')">⬆️ Použiť túto (lokálnu) verziu <span class="konflikt-sub" id="konflikt-local-sub"></span></button>
       <button class="btn btn-secondary konflikt-choice" onclick="konfliktVyber('neskor')">🕒 Rozhodnúť neskôr</button>
     </div>
   </div>
@@ -1772,8 +1772,20 @@ async function driveBackup() {
 let _syncBezi = false;
 
 function softReload() {
-  // Re-render UI bez location.reload — rozrobený formulár ostáva nedotknutý
+  // Re-render UI bez location.reload.
   renderHistory();
+  // Ak je otvorený existujúci protokol, premietni doň aktuálne (zlúčené/stiahnuté)
+  // dáta — inak by formulár ukazoval staré až do prepnutia protokolu.
+  if (currentId !== null) {
+    const p = protocols.find(x => x.id === currentId);
+    if (p) {
+      loadData(p);
+      rememberLastOkruh(p.klimaGroups || []);
+      // Draft nastav priamo z dát protokolu (NIE z formulára — ten sa napĺňa
+      // asynchrónne), nech prípadný refresh neukáže starý draft.
+      Store.set('mpk_draft', Object.assign({}, p, { currentId: currentId }));
+    }
+  }
 }
 
 // Stiahne najnovšiu cloud zálohu (alebo null)
@@ -1850,8 +1862,18 @@ function otvorKonflikt(cloudData) {
   _konfliktCloud = cloudData;
   const localCount = protocols.length;
   const cloudCount = (cloudData.protocols || []).length;
+  const cloudLabel = (cloudData._meta && cloudData._meta.deviceLabel) || 'iné zariadenie';
+  const localLabel = Store.getRaw('mpk_device_label', '') || 'toto zariadenie';
+  const cloudTime = (cloudData._meta && cloudData._meta.exportedAt)
+    ? new Date(cloudData._meta.exportedAt).toLocaleString('sk-SK') : '';
+
   const info = document.getElementById('konflikt-info');
-  if (info) info.textContent = 'Lokálne zariadenie: ' + localCount + ' protokolov · Cloud: ' + cloudCount + ' protokolov';
+  if (info) info.textContent = 'Toto („' + localLabel + '"): ' + localCount + ' protokolov  ·  ' +
+    'Cloud („' + cloudLabel + '"): ' + cloudCount + ' protokolov';
+  const cloudSub = document.getElementById('konflikt-cloud-sub');
+  if (cloudSub) cloudSub.textContent = 'z „' + cloudLabel + '"' + (cloudTime ? ' · ' + cloudTime : '') + ' — zahodí lokálne zmeny';
+  const localSub = document.getElementById('konflikt-local-sub');
+  if (localSub) localSub.textContent = 'toto zariadenie „' + localLabel + '" — prepíše cloud';
   // Default odporúčanie: zvýrazni "Spojiť", okrem prázdneho lokálu → "Stiahnuť cloud"
   const merge = document.getElementById('konflikt-merge-btn');
   const cloud = document.getElementById('konflikt-cloud-btn');
