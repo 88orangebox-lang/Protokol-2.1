@@ -447,7 +447,7 @@ input[readonly], input:disabled, select:disabled {
   .scanner-torch-btn { background: var(--bg-button); color: var(--text-button); border: 1.5px solid var(--border-group); border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; cursor: pointer; font-family: Arial, sans-serif; transition: all 0.15s; }
   .scanner-torch-btn:hover { border-color: var(--accent); }
   .scanner-torch-btn.torch-on { background: #f59e0b; color: #1a1a1a; border-color: #f59e0b; }
-  #ocr-review { width: fit-content; max-width: 100%; margin: 0 auto; background: #000; border-radius: 6px; overflow: hidden; position: relative; }
+  #ocr-review { width: fit-content; max-width: 100%; margin: 0 auto; background: #000; border-radius: 6px; overflow: hidden; position: relative; touch-action: none; }
   .ocr-review-canvas { display: block; }
   #ocr-crop-box { position: absolute; border: 2px solid #fff; box-sizing: border-box; cursor: move; touch-action: none; }
   .ocr-dim { position: absolute; background: rgba(0,0,0,0.55); pointer-events: none; }
@@ -722,7 +722,10 @@ input[readonly], input:disabled, select:disabled {
           <div class="ocr-crop-handle right"></div>
         </div>
       </div>
-      <div class="ocr-crop-hint" id="ocr-crop-hint" style="display:none;">Potiahni okraje rámika – ostane len text vnútri</div>
+      <div class="ocr-crop-hint" id="ocr-crop-hint" style="display:none;">
+        ✌️ Dvomi prstami priblíž text · 1 prstom uprav rámik len na text
+        <button type="button" class="btn btn-secondary" id="ocr-zoom-reset" onclick="resetOcrZoom()" style="margin-left:6px; padding:2px 10px; font-size:11px;">1×</button>
+      </div>
       <div class="ocr-controls" id="scanner-ocr-controls" style="display:none;">
         <div id="ocr-live-controls">
           <button class="btn btn-primary" id="ocr-native-btn" onclick="openNativeCamera()">📷 Odfotiť natívnym foťákom</button>
@@ -2435,6 +2438,10 @@ let _ocrCapturedCanvas = null;// zachytená OCR fotka čakajúca na potvrdenie
 let _crop = null;             // orezový rámik {x,y,w,h} v CSS px náhľadu
 let _cropDrag = null;         // stav ťahania orezového rámika
 let _renderPending = false;   // rAF-batch flag pre plynulé prekresľovanie
+let _ocrView = null;          // viewport fotky v náhľade {scale, ox, oy}
+let _baseScale = 1;           // mierka pri zobrazení celej fotky (zoom 1×)
+let _ocrPointers = new Map(); // aktívne prsty na náhľade (pre pinch-zoom)
+let _pinch = null;            // stav pinch gesta
 let _scannerZoom = 1;         // aktuálny zoom živého náhľadu
 let _zoomSupported = false;   // kamera podporuje zoom constraint
 
@@ -3195,6 +3202,7 @@ function resetOcrReviewUI() {
   set('ocr-result-box', 'none');
   set('ocr-live-controls', '');
   set('ocr-progress', 'none');
+  _ocrView = null; _ocrPointers.clear(); _pinch = null;
   // Živá kamera + zoom len v barcode režime; OCR ich nemá
   const barcodeMode = (_scannerMode === 'barcode');
   set('scanner-reader', barcodeMode ? '' : 'none');
@@ -3238,7 +3246,11 @@ function showOcrReview(canvas) {
   const scale = Math.min(maxW / canvas.width, maxH / canvas.height, 1); // neup-scalujeme
   rc.width = Math.max(1, Math.round(canvas.width * scale));
   rc.height = Math.max(1, Math.round(canvas.height * scale));
-  rc.getContext('2d').drawImage(canvas, 0, 0, rc.width, rc.height);
+  // Viewport: na začiatku celá fotka vystredená (zoom 1×). Pinch ho mení.
+  _baseScale = Math.min(rc.width / canvas.width, rc.height / canvas.height);
+  _ocrView = { scale: _baseScale, ox: (rc.width - canvas.width * _baseScale) / 2, oy: (rc.height - canvas.height * _baseScale) / 2 };
+  _ocrPointers.clear(); _pinch = null;
+  renderOcrViewport();
   document.getElementById('scanner-reader').style.display = 'none';
   document.getElementById('scanner-zoom-controls').style.display = 'none';
   document.getElementById('ocr-live-controls').style.display = 'none';
@@ -3350,6 +3362,7 @@ function initCropBox() {
     h: Math.round(rh * 0.32)
   };
   bindCropEvents();
+  bindOcrZoom();
   renderCropBox();
 }
 
@@ -3440,18 +3453,79 @@ function bindCropEvents() {
   window.addEventListener('pointercancel', endDrag);
 }
 
-// Vráti orezaný canvas pre OCR (alebo null ak rámik nie je / nemá rozmery)
+// Vykreslí fotku do náhľadu podľa aktuálneho viewportu (zoom/pan)
+function renderOcrViewport() {
+  if (!_ocrCapturedCanvas || !_ocrView) return;
+  const rc = document.getElementById('ocr-review-canvas');
+  const ctx = rc.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, rc.width, rc.height);
+  const s = _ocrView.scale;
+  ctx.drawImage(_ocrCapturedCanvas, 0, 0, _ocrCapturedCanvas.width, _ocrCapturedCanvas.height,
+    _ocrView.ox, _ocrView.oy, _ocrCapturedCanvas.width * s, _ocrCapturedCanvas.height * s);
+}
+
+// Reset zoomu na celú fotku (1×)
+function resetOcrZoom() {
+  if (!_ocrCapturedCanvas) return;
+  const rc = document.getElementById('ocr-review-canvas');
+  _baseScale = Math.min(rc.width / _ocrCapturedCanvas.width, rc.height / _ocrCapturedCanvas.height);
+  _ocrView = { scale: _baseScale, ox: (rc.width - _ocrCapturedCanvas.width * _baseScale) / 2, oy: (rc.height - _ocrCapturedCanvas.height * _baseScale) / 2 };
+  renderOcrViewport(); renderCropBox();
+}
+
+// Pinch-zoom + pan fotky 2 prstami (1 prst ostáva pre orezový rámik)
+function bindOcrZoom() {
+  const review = document.getElementById('ocr-review');
+  if (!review || review.dataset.zoomBound) return;
+  review.dataset.zoomBound = '1';
+  const distOf = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const midOf = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const localPt = (e) => { const r = review.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+
+  // CAPTURE fáza — vidíme prsty aj keď padnú na orezový rámik (ten robí stopPropagation)
+  review.addEventListener('pointerdown', (e) => {
+    _ocrPointers.set(e.pointerId, localPt(e));
+    if (_ocrPointers.size === 2 && _ocrView) {
+      _cropDrag = null; // 2 prsty → zruš ťahanie rámika, ideme zoomovať
+      const pts = [..._ocrPointers.values()];
+      const m = midOf(pts[0], pts[1]);
+      const s = _ocrView.scale;
+      _pinch = { d0: distOf(pts[0], pts[1]) || 1, spx: (m.x - _ocrView.ox) / s, spy: (m.y - _ocrView.oy) / s, scale0: s };
+    }
+  }, true);
+
+  window.addEventListener('pointermove', (e) => {
+    if (!_ocrPointers.has(e.pointerId)) return;
+    _ocrPointers.set(e.pointerId, localPt(e));
+    if (_ocrPointers.size === 2 && _pinch && _ocrView) {
+      e.preventDefault();
+      const pts = [..._ocrPointers.values()];
+      const d1 = distOf(pts[0], pts[1]);
+      const m1 = midOf(pts[0], pts[1]);
+      const newScale = Math.max(_baseScale, Math.min(_pinch.scale0 * (d1 / _pinch.d0), _baseScale * 8));
+      _ocrView.scale = newScale;
+      _ocrView.ox = m1.x - _pinch.spx * newScale;
+      _ocrView.oy = m1.y - _pinch.spy * newScale;
+      if (!_renderPending) { _renderPending = true; requestAnimationFrame(() => { _renderPending = false; renderOcrViewport(); renderCropBox(); }); }
+    }
+  }, { passive: false });
+
+  const up = (e) => { _ocrPointers.delete(e.pointerId); if (_ocrPointers.size < 2) _pinch = null; };
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+}
+
+// Vráti orezaný canvas pre OCR z PLNÉHO rozlíšenia (rámik mapovaný cez viewport)
 function getCroppedCanvas() {
-  if (!_ocrCapturedCanvas || !_crop) return null;
-  const disp = document.getElementById('ocr-review-canvas');
-  const dw = disp.clientWidth, dh = disp.clientHeight;
-  if (!dw || !dh) return null;
-  const scaleX = _ocrCapturedCanvas.width / dw;
-  const scaleY = _ocrCapturedCanvas.height / dh;
-  const sx = Math.max(0, Math.round(_crop.x * scaleX));
-  const sy = Math.max(0, Math.round(_crop.y * scaleY));
-  const sw = Math.min(Math.round(_crop.w * scaleX), _ocrCapturedCanvas.width - sx);
-  const sh = Math.min(Math.round(_crop.h * scaleY), _ocrCapturedCanvas.height - sy);
+  if (!_ocrCapturedCanvas || !_crop || !_ocrView) return null;
+  const s = _ocrView.scale;
+  const sx = Math.max(0, Math.round((_crop.x - _ocrView.ox) / s));
+  const sy = Math.max(0, Math.round((_crop.y - _ocrView.oy) / s));
+  let sw = Math.round(_crop.w / s);
+  let sh = Math.round(_crop.h / s);
+  sw = Math.min(sw, _ocrCapturedCanvas.width - sx);
+  sh = Math.min(sh, _ocrCapturedCanvas.height - sy);
   if (sw < 8 || sh < 8) return null;
   const cc = document.createElement('canvas');
   cc.width = sw; cc.height = sh;
