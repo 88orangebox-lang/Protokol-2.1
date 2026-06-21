@@ -1756,6 +1756,29 @@ async function driveBackup() {
   try {
     showToast('Prihlasujem na Google...');
     await ensureDriveToken();
+    // Pull-check pred pushom (ako auto-push aj pull-on-open) — nech manuálna
+    // záloha neprehliadne novšie zmeny z iného zariadenia.
+    setCloudStatus('pulling');
+    const folderId = await driveGetOrCreateFolder();
+    const cloudData = await _stiahniNajnovsiCloud(folderId);
+    const cmp = _porovnajMeta(cloudData || {});
+
+    if (cloudData && cmp.cloudZmenaOdSync && cmp.localZmenaOdSync) {
+      // oboje zmenené → namiesto slepého pushu otvor konflikt
+      setCloudStatus('pending');
+      otvorKonflikt(cloudData);
+      return;
+    }
+    if (cloudData && cmp.cloudZmenaOdSync) {
+      // cloud novší, ja čistý → stiahni namiesto prepísania
+      _aplikujZalohu(cloudData);
+      setLastSync(Date.now());
+      softReload();
+      setCloudStatus('ok');
+      showToast('⬇️ Cloud bol novší — stiahnuté', 'success');
+      return;
+    }
+    // inak push
     setCloudStatus('pushing');
     showToast('Zálohujem na Disk...');
     await _pushDataNaDisk(vytvorDataZalohy());
@@ -1888,31 +1911,32 @@ function closeKonflikt() { document.getElementById('konflikt-modal').classList.r
 
 async function konfliktVyber(volba) {
   const cloud = _konfliktCloud;
+  _konfliktCloud = null;
   if (!cloud) { closeKonflikt(); return; }
   if (volba === 'neskor') { closeKonflikt(); setCloudStatus('pending'); return; }
-  const local = vytvorDataZalohy();
   closeKonflikt();
-  try {
-    setCloudStatus('pushing');
-    if (volba === 'merge') {
-      const merged = _zlucZalohy(local, cloud);
-      _aplikujZalohu(merged);
-      await _pushDataNaDisk(merged);
-    } else if (volba === 'cloud') {
-      _aplikujZalohu(cloud);
-      // cloud sme prijali — netreba push (cloud je už zdroj)
-    } else if (volba === 'local') {
-      await _pushDataNaDisk(local);
-    }
-    setLastSync(Date.now());
-    softReload();
+  const local = vytvorDataZalohy();
+  setCloudStatus('pushing');
+
+  // Urči finálny stav a aplikuj ho LOKÁLNE HNEĎ — dáta sú správne aj keby push
+  // zlyhal (predtým: pri chybe push sa softReload nezavolal a merge ostal "neviditeľný").
+  let finalData;
+  if (volba === 'merge') { finalData = _zlucZalohy(local, cloud); _aplikujZalohu(finalData); }
+  else if (volba === 'cloud') { finalData = cloud; _aplikujZalohu(finalData); }
+  else { finalData = local; } // 'local' — lokál ostáva, netreba aplikovať
+  setLastSync(Date.now());
+
+  // Re-push zvoleného stavu (konvergencia) — best-effort, NEblokuje obnovu UI
+  _pushDataNaDisk(finalData).then(() => setCloudStatus('ok')).catch(() => setCloudStatus('error'));
+
+  if (volba === 'local') {
     setCloudStatus('ok');
-    showToast('✅ Konflikt vyriešený (' + (volba === 'merge' ? 'spojené' : volba === 'cloud' ? 'cloud' : 'lokálne') + ')', 'success');
-  } catch(e) {
-    setCloudStatus('error');
-    showToast('❌ ' + (e.message || e), 'error');
-  } finally {
-    _konfliktCloud = null;
+    showToast('✅ Konflikt vyriešený — odoslaná lokálna verzia', 'success');
+  } else {
+    // Po explicitnej voľbe je plný reload spoľahlivý (ako EasyCena). Rozrobený
+    // draft prežije reload, takže sa práca nestratí.
+    showToast('✅ Konflikt vyriešený — obnovujem...', 'success');
+    setTimeout(() => location.reload(), 1000);
   }
 }
 
