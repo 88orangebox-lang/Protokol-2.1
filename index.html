@@ -54,7 +54,7 @@
   .dli-meta { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 
   /* MAIN */
-  .main-content { flex: 1; padding: 24px; overflow-y: auto; min-width: 0; }
+  .main-content { flex: 1; padding: 24px 24px 90px; overflow-y: auto; min-width: 0; }
   .main-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
   .main-header-left { display: flex; align-items: center; gap: 10px; }
   .main-header h1 { font-size: 16px; color: #1a2332; }
@@ -165,7 +165,7 @@
   .toast.warning { background: #d97706; }
 
   /* CLOUD STATUS INDIKÁTOR */
-  .cloud-status { position: fixed; bottom: 16px; left: 16px; z-index: 9998; min-width: 34px; height: 34px; padding: 0 10px; border-radius: 18px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.3); user-select: none; color: #fff; }
+  .cloud-status { position: fixed; bottom: 70px; left: 16px; z-index: 9998; min-width: 34px; height: 34px; padding: 0 10px; border-radius: 18px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.3); user-select: none; color: #fff; }
   .cloud-status.cs-ok { background: #16a34a; }
   .cloud-status.cs-pending { background: #d97706; }
   .cloud-status.cs-busy { background: #2563eb; }
@@ -377,6 +377,7 @@ input[readonly], input:disabled, select:disabled {
   /* 1. Schováme celú tmavú aplikáciu */
   .app-wrapper { display: none !important; }
   #form-section, .sidebar-overlay, .modal-overlay { display: none !important; }
+  .tabbar, #view-archiv, #view-nastavenia { display: none !important; }
 
   /* 2. Čisté biele PDF bez okrajov (zruší dátumy a URL cesty z prehliadača) */
   body { background: white !important; margin: 0; padding: 0; }
@@ -485,7 +486,7 @@ input[readonly], input:disabled, select:disabled {
     .sidebar.open { transform: translateX(0); }
     .sidebar-close-btn { display: block; }
     .btn-hamburger { display: block; }
-    .main-content { padding: 12px; }
+    .main-content { padding: 12px 12px 90px; }
     .form-grid, .form-grid.three { grid-template-columns: 1fr !important; }
     .btn { padding: 8px 10px; font-size: 12px; }
     .table-input th, .table-input td { font-size: 10px; padding: 2px 1px; }
@@ -494,6 +495,30 @@ input[readonly], input:disabled, select:disabled {
     .combo-btn { padding: 6px 10px; font-size: 12px; }
     .okruh-type-btn { padding: 6px 10px; font-size: 11px; }
   }
+
+  /* ===== SPODNÝ TAB-BAR + SEKCIE (Protokol / Archív / Nastavenia) ===== */
+  .view-inner { max-width: 760px; margin: 0 auto; padding: 20px 16px 90px; }
+  .view-title { font-size: 18px; color: var(--text-primary); margin-bottom: 16px; }
+  .view-search input { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; border-radius: 8px; margin-bottom: 14px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-group); font-family: Arial, sans-serif; }
+  .view-search input::placeholder { color: var(--text-secondary); }
+  .view-search input:focus { outline: none; border-color: var(--accent); }
+
+  #view-archiv .history-list { overflow: visible; padding: 0; }
+  #view-archiv .history-item { background: var(--bg-card); border: 1px solid var(--border-group); margin-bottom: 8px; padding: 12px 14px; }
+  #view-archiv .history-item:hover { background: var(--bg-button-hover); }
+  #view-archiv .history-item.active { border-color: var(--accent); }
+  #view-archiv .hi-num { color: var(--accent); }
+  #view-archiv .hi-name { color: var(--text-primary); }
+  #view-archiv .hi-date { color: var(--text-secondary); }
+  #view-archiv .history-empty { color: var(--text-secondary); }
+
+  .settings-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 10px; padding: 14px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .settings-card-title { font-size: 13px; font-weight: bold; color: var(--text-primary); margin-bottom: 2px; }
+
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500; display: flex; background: var(--bg-card); border-top: 1px solid var(--border-card); box-shadow: 0 -2px 12px rgba(0,0,0,0.25); padding-bottom: env(safe-area-inset-bottom); }
+  .tabbar-btn { flex: 1; background: none; border: none; cursor: pointer; padding: 8px 4px 10px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 600; font-family: inherit; transition: color 0.15s; }
+  .tabbar-ico { font-size: 21px; line-height: 1; }
+  .tabbar-btn.active { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -517,38 +542,9 @@ input[readonly], input:disabled, select:disabled {
 <!-- MAIN APP -->
 <div class="app-wrapper" id="form-section">
 
-  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
-
-  <div class="sidebar" id="sidebar">
-    <div class="sidebar-header">
-      <span>📋</span> História protokolov
-      <button class="sidebar-close-btn" onclick="closeSidebar()">✕</button>
-    </div>
-    <div class="sidebar-actions">
-      <button class="btn-new" onclick="newProtocol()">+ Nový protokol</button>
-      <button class="btn-secondary" style="width:100%; margin-top:8px; padding: 9px; font-size: 13px; font-weight: bold; border-radius: 6px; cursor: pointer; border: none;" onclick="openProfile()">👤 Profil technika</button>
-    </div>
-    <div class="sidebar-search">
-      <input type="search" id="history-search" placeholder="Hľadať zákazku, zákazníka, miesto..." oninput="renderHistory()" autocomplete="off">
-    </div>
-    <div class="history-list" id="history-list"></div>
-    <div class="sidebar-bottom">
-      <div id="storage-status" style="font-size:11px;padding:6px 8px;border-radius:5px;margin-bottom:6px;text-align:center;"></div>
-      <button class="btn-backup" onclick="exportBackup()">📤 Exportovať zálohu</button>
-      <label class="btn-backup" style="text-align:center;cursor:pointer;">
-        📥 Importovať zálohu
-        <input type="file" accept=".json" id="import-file-input" style="display:none;" onchange="importBackup(this)">
-      </label>
-      <input type="text" id="device-label-input" class="device-label-input" placeholder="📱 Názov zariadenia (napr. Tablet)" oninput="ulozDeviceLabel(this.value)" autocomplete="off">
-      <button class="btn-backup" onclick="driveBackup()">☁️ Zálohovať na Google Disk</button>
-      <button class="btn-backup" onclick="openDriveList()">⬇️ Obnoviť z Google Disku</button>
-    </div>
-  </div>
-
   <div class="main-content">
     <div class="main-header">
       <div class="main-header-left">
-        <button class="btn-hamburger" onclick="openSidebar()">☰</button>
         <h1>🔧 Protokol o spustení klimatizačného zariadenia</h1>
         <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Prepnúť svetlú / tmavú tému">☀️</button>
       </div>
@@ -612,6 +608,56 @@ input[readonly], input:disabled, select:disabled {
 
   </div>
 </div>
+
+<!-- VIEW: ARCHÍV -->
+<section class="view" id="view-archiv" style="display:none;">
+  <div class="view-inner">
+    <h2 class="view-title">📁 Archív protokolov</h2>
+    <div class="view-search">
+      <input type="search" id="history-search" placeholder="Hľadať zákazku, zákazníka, miesto..." oninput="renderHistory()" autocomplete="off">
+    </div>
+    <div class="history-list" id="history-list"></div>
+  </div>
+</section>
+
+<!-- VIEW: NASTAVENIA -->
+<section class="view" id="view-nastavenia" style="display:none;">
+  <div class="view-inner">
+    <h2 class="view-title">⚙️ Nastavenia</h2>
+    <div class="settings-card">
+      <button class="btn-backup" onclick="openProfile()">👤 Profil technika</button>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-title">☁️ Cloud záloha (Google Drive)</div>
+      <input type="text" id="device-label-input" class="device-label-input" placeholder="📱 Názov zariadenia (napr. Tablet)" oninput="ulozDeviceLabel(this.value)" autocomplete="off">
+      <button class="btn-backup" onclick="driveBackup()">☁️ Zálohovať na Google Disk</button>
+      <button class="btn-backup" onclick="openDriveList()">⬇️ Obnoviť z Google Disku</button>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-title">💾 Lokálna záloha (JSON súbor)</div>
+      <button class="btn-backup" onclick="exportBackup()">📤 Exportovať zálohu</button>
+      <label class="btn-backup" style="text-align:center;cursor:pointer;display:block;">
+        📥 Importovať zálohu
+        <input type="file" accept=".json" id="import-file-input" style="display:none;" onchange="importBackup(this)">
+      </label>
+    </div>
+    <div id="storage-status" style="font-size:11px;padding:6px 8px;border-radius:5px;text-align:center;"></div>
+  </div>
+</section>
+
+<!-- SPODNÝ TAB-BAR -->
+<nav class="tabbar" id="tabbar">
+  <button class="tabbar-btn active" data-tab="protokol" onclick="switchTab('protokol')">
+    <span class="tabbar-ico">📝</span><span class="tabbar-lbl">Protokol</span>
+  </button>
+  <button class="tabbar-btn" data-tab="archiv" onclick="switchTab('archiv')">
+    <span class="tabbar-ico">📁</span><span class="tabbar-lbl">Archív</span>
+  </button>
+  <button class="tabbar-btn" data-tab="nastavenia" onclick="switchTab('nastavenia')">
+    <span class="tabbar-ico">⚙️</span><span class="tabbar-lbl">Nastavenia</span>
+  </button>
+</nav>
+
 <div class="toast" id="toast"></div>
 <div id="cloud-status" class="cloud-status" style="display:none;" onclick="cloudStatusClick()"></div>
 <div class="modal-overlay" id="profile-modal">
@@ -920,8 +966,20 @@ function rememberLastOkruh(klimaGroups) {
 
 
 // ===== SIDEBAR =====
-function openSidebar() { document.getElementById('sidebar').classList.add('open'); document.getElementById('sidebar-overlay').classList.add('open'); }
-function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebar-overlay').classList.remove('open'); }
+// Prepínanie spodných sekcií (tab-bar). Protokol = #form-section.
+function switchTab(name) {
+  const map = { protokol: 'form-section', archiv: 'view-archiv', nastavenia: 'view-nastavenia' };
+  Object.keys(map).forEach(k => {
+    const el = document.getElementById(map[k]);
+    if (el) el.style.display = (k === name) ? '' : 'none';
+  });
+  document.querySelectorAll('.tabbar-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  if (name === 'archiv') renderHistory();
+  window.scrollTo(0, 0);
+}
+// Sidebar nahradený tab-barom — funkcie ponechané ako bezpečné no-op pre staré volania.
+function openSidebar() {}
+function closeSidebar() {}
 
 // ===== TÉMA (svetlá / tmavá) =====
 function toggleTheme() {
@@ -1527,7 +1585,7 @@ function newProtocol() {
   document.getElementById('technik').value = Store.getRaw('mpk_technik_profil', '');
   addKlimaGroup();
   document.getElementById('btn-delete').style.display = 'none';
-  renderHistory(); closeSidebar();
+  renderHistory();
   showToast('📝 Nový protokol');
 }
 function deleteProtocol() {
@@ -2273,7 +2331,7 @@ function loadById(id) {
   currentId = id; loadData(p); renderHistory();
   rememberLastOkruh(p.klimaGroups || []);
   document.getElementById('btn-delete').style.display = '';
-  closeSidebar();
+  switchTab('protokol');
 }
 function deleteById(id) {
   if (!confirm('Naozaj vymazať?')) return;
