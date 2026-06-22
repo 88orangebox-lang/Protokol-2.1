@@ -651,6 +651,18 @@ input[readonly], input:disabled, select:disabled {
       </div>
     </div>
 
+    <div class="settings-card">
+      <button class="settings-card-head" onclick="toggleSettingsCard(this)">
+        <span class="sc-title">📄 Názov PDF súboru</span><span class="sc-chevron">▾</span>
+      </button>
+      <div class="settings-card-content">
+        <label class="settings-label">Šablóna názvu</label>
+        <input type="text" id="set-pdf-template" class="settings-input" oninput="ulozPdfTemplate()" placeholder="{zakazka} - č.o.{okruhy} - Protokol o spustení" autocomplete="off">
+        <p class="cloud-hint">Premenné: <b>{zakazka}</b> · <b>{zakaznik}</b> (priezvisko) · <b>{okruhy}</b> (čísla okruhov) · <b>{datum}</b></p>
+        <button class="btn-backup" onclick="resetPdfTemplate()">↺ Obnoviť predvolenú šablónu</button>
+      </div>
+    </div>
+
     <div class="settings-card open" id="cloud-card">
       <button class="settings-card-head" onclick="toggleSettingsCard(this)">
         <span class="sc-title">☁️ Cloud záloha (Google Drive)</span><span class="sc-chevron">▾</span>
@@ -1000,7 +1012,7 @@ function switchTab(name) {
   });
   document.querySelectorAll('.tabbar-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   if (name === 'archiv') renderHistory();
-  if (name === 'nastavenia') { naplnTechnikPolia(); renderCloudCard(); }
+  if (name === 'nastavenia') { naplnTechnikPolia(); renderCloudCard(); naplnPdfTemplatePole(); }
   window.scrollTo(0, 0);
 }
 // Sidebar nahradený tab-barom — funkcie ponechané ako bezpečné no-op pre staré volania.
@@ -1057,6 +1069,7 @@ window.onload = () => {
   const dlInput = document.getElementById('device-label-input');
   if (dlInput) dlInput.value = Store.getRaw('mpk_device_label', '');
   naplnTechnikPolia();
+  naplnPdfTemplatePole();
 
   // Cloud sync: načítaj uložený token a nastav stavový indikátor (len Drive používateľ)
   nactajUlozenyToken();
@@ -2500,11 +2513,7 @@ function doPrint() {
   // Bonus F: pred tlačou dočasne prepíšeme document.title — prehliadač ho použije ako navrhovaný názov PDF.
   // PDF generovanie samotné (#proto-print-content / generateProtoHTML / @media print) sa nemení.
   const data = collectData();
-  const safe = s => (s || '').trim().replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_').slice(0, 40);
-  const cislo = safe(data.cislo_zakazky) || 'protokol';
-  const surname = (data.zakaznik || '').trim().split(/\s+/).pop();
-  const zakClean = safe(surname);
-  const newTitle = 'Protokol_' + cislo + (zakClean ? '_' + zakClean : '');
+  const newTitle = pdfNazov(data); // šablóna z Nastavení — mení LEN názov súboru, nie obsah PDF
   const originalTitle = document.title;
   document.title = newTitle;
 
@@ -2595,6 +2604,41 @@ function cloudLogout() {
   setCloudStatus('logged-out');
   renderCloudCard();
   showToast('👋 Odhlásený z Google Drive');
+}
+
+// ===== NÁZOV PDF SÚBORU (šablóna s tokenmi) =====
+const DEFAULT_PDF_TEMPLATE = '{zakazka} - č.o.{okruhy} - Protokol o spustení';
+function naplnPdfTemplatePole() {
+  const el = document.getElementById('set-pdf-template');
+  if (el) el.value = Store.getRaw('mpk_pdf_template', DEFAULT_PDF_TEMPLATE);
+}
+function ulozPdfTemplate() {
+  const el = document.getElementById('set-pdf-template');
+  if (el) Store.setRaw('mpk_pdf_template', el.value);
+}
+function resetPdfTemplate() {
+  Store.setRaw('mpk_pdf_template', DEFAULT_PDF_TEMPLATE);
+  naplnPdfTemplatePole();
+  showToast('↺ Predvolená šablóna obnovená');
+}
+// Zostaví navrhovaný názov PDF súboru z dát protokolu a šablóny.
+// {okruhy} = čísla okruhov všetkých klím spojené pomlčkou (viac klím → 0001-0002).
+function pdfNazov(data) {
+  const tpl = Store.getRaw('mpk_pdf_template', DEFAULT_PDF_TEMPLATE);
+  const priezvisko = (data.zakaznik || '').trim().split(/\s+/).pop() || '';
+  const okruhy = (data.klimaGroups || [])
+    .map(g => (g.okruh || '').trim())
+    .filter(Boolean)
+    .join('-');
+  const datum = data.datum_spustenia ? formatDate(data.datum_spustenia) : '';
+  let s = tpl
+    .replace(/\{zakazka\}/gi, data.cislo_zakazky || '')
+    .replace(/\{zakaznik\}/gi, priezvisko)
+    .replace(/\{okruhy\}/gi, okruhy)
+    .replace(/\{datum\}/gi, datum);
+  // Odstráň znaky nepovolené v názve súboru (medzery/pomlčky/bodky nechaj).
+  s = s.replace(/[\\/:*?"<>|]+/g, '').replace(/\s{2,}/g, ' ').trim();
+  return s || 'Protokol';
 }
 
 // ===== DATABÁZA ZARIADENÍ (Z HISTÓRIE) =====
