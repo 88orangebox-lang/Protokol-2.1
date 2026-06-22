@@ -553,6 +553,7 @@ input[readonly], input:disabled, select:disabled {
         <button class="btn-theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Prepnúť svetlú / tmavú tému">☀️</button>
       </div>
       <div class="btn-group">
+        <button class="btn btn-secondary" onclick="newProtocolConfirm()">➕ Nový</button>
         <button class="btn btn-success" id="btn-save" onclick="saveProtocol()">💾 Uložiť</button>
         <button class="btn btn-print" onclick="previewProtocol()">📄 Náhľad / PDF</button>
         <button class="btn btn-danger" id="btn-delete" onclick="deleteProtocol()" style="display:none;">🗑️ Vymazať</button>
@@ -1463,6 +1464,57 @@ function saveProtocol() {
     }
   }, 30);
 }
+// Projekcia protokolu na len-dátové polia (bez id/savedAt/modifiedAt) pre porovnanie.
+function porovnatelnyProtokol(p) {
+  return {
+    cislo_zakazky: p.cislo_zakazky || '',
+    datum_instalacie: p.datum_instalacie || '',
+    datum_spustenia: p.datum_spustenia || '',
+    zakaznik: p.zakaznik || '',
+    miesto_instalacie: p.miesto_instalacie || '',
+    technik: p.technik || '',
+    klimaGroups: p.klimaGroups || [],
+    spustenie_ok: !!p.spustenie_ok,
+    spustenie_problem: !!p.spustenie_problem,
+    poznamky: p.poznamky || ''
+  };
+}
+
+// Prázdny = čerstvý nový formulár (ignoruje predvyplneného technika a dnešné dátumy).
+function jePrazdnyFormular(cur) {
+  if ((cur.cislo_zakazky || '').trim() || (cur.zakaznik || '').trim() ||
+      (cur.miesto_instalacie || '').trim() || (cur.poznamky || '').trim()) return false;
+  if (cur.spustenie_ok || cur.spustenie_problem) return false;
+  // Pozn.: chladivo (chl_typ) sa vždy defaultne nastaví na R32 a merania majú placeholdery,
+  // takže nie sú spoľahlivým signálom, že používateľ niečo zadal — neberieme ich do úvahy.
+  for (const g of (cur.klimaGroups || [])) {
+    if ((g.okruh || '').trim() || (g.okruhType || '').trim() || (g.vyrobca || '').trim() ||
+        (g.ou_model || '').trim() || (g.ou_sn || '').trim()) return false;
+    for (const iu of (g.indoor || [])) {
+      if ((iu.model || '').trim() || (iu.sn || '').trim()) return false;
+    }
+  }
+  return true;
+}
+
+// Má aktuálny formulár neuložené zmeny oproti uloženému stavu?
+function maNeulozeneZmeny() {
+  const cur = collectData();
+  if (currentId !== null) {
+    const saved = protocols.find(p => p.id === currentId);
+    if (!saved) return true;
+    return JSON.stringify(porovnatelnyProtokol(cur)) !== JSON.stringify(porovnatelnyProtokol(saved));
+  }
+  return !jePrazdnyFormular(cur);
+}
+
+// Tlačidlo „➕ Nový" — varuje len ak sú reálne neuložené zmeny.
+function newProtocolConfirm() {
+  if (maNeulozeneZmeny() &&
+      !confirm('Naozaj vytvoriť nový protokol?\n\nNeuložené zmeny v aktuálnom protokole sa stratia — najprv ho ulož.')) return;
+  newProtocol();
+}
+
 function newProtocol() {
   currentId = null;
   document.querySelectorAll('#form-section input:not([type="checkbox"]):not([type="date"]):not(#device-label-input)').forEach(el => el.value = '');
