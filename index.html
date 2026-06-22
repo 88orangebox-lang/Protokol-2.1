@@ -514,6 +514,8 @@ input[readonly], input:disabled, select:disabled {
 
   .settings-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 10px; padding: 14px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
   .settings-card-title { font-size: 13px; font-weight: bold; color: var(--text-primary); margin-bottom: 2px; }
+  .settings-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+  .settings-input { width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 14px; border-radius: 6px; }
 
   .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500; display: flex; background: var(--bg-card); border-top: 1px solid var(--border-card); box-shadow: 0 -2px 12px rgba(0,0,0,0.25); padding-bottom: env(safe-area-inset-bottom); }
   .tabbar-btn { flex: 1; background: none; border: none; cursor: pointer; padding: 8px 4px 10px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 600; font-family: inherit; transition: color 0.15s; }
@@ -625,7 +627,11 @@ input[readonly], input:disabled, select:disabled {
   <div class="view-inner">
     <h2 class="view-title">⚙️ Nastavenia</h2>
     <div class="settings-card">
-      <button class="btn-backup" onclick="openProfile()">👤 Profil technika</button>
+      <div class="settings-card-title">👤 Technik</div>
+      <label class="settings-label">Meno a priezvisko</label>
+      <input type="text" id="set-technik-meno" class="settings-input" placeholder="Napr. Ing. Peter Mihajľ" oninput="ulozTechnik()" autocomplete="off">
+      <label class="settings-label">Číslo osvedčenia</label>
+      <input type="text" id="set-technik-cislo" class="settings-input" placeholder="Napr. 6292" oninput="ulozTechnik()" autocomplete="off">
     </div>
     <div class="settings-card">
       <div class="settings-card-title">☁️ Cloud záloha (Google Drive)</div>
@@ -660,20 +666,6 @@ input[readonly], input:disabled, select:disabled {
 
 <div class="toast" id="toast"></div>
 <div id="cloud-status" class="cloud-status" style="display:none;" onclick="cloudStatusClick()"></div>
-<div class="modal-overlay" id="profile-modal">
-  <div class="modal-box" style="max-width: 400px;">
-    <div class="modal-toolbar">
-      <h3>👤 Profil technika</h3>
-      <button class="btn btn-secondary" onclick="closeProfile()">✕ Zavrieť</button>
-    </div>
-    <div class="modal-body form-group">
-      <label>Meno a číslo osvedčenia (Predvolené)</label>
-      <input type="text" id="profile-technik-input" placeholder="Napr. Ing. Peter Mihajľ, 6292" style="width: 100%; margin-top: 5px; box-sizing: border-box; padding: 8px; border: 1.5px solid #e2e8f0; border-radius: 6px;">
-      <button class="btn btn-primary" style="margin-top: 15px; width: 100%;" onclick="saveProfile()">💾 Uložiť profil</button>
-    </div>
-  </div>
-</div>
-
 <!-- ZOZNAM CLOUD ZÁLOH -->
 <div class="modal-overlay" id="drive-list-modal">
   <div class="modal-box" style="max-width: 560px;">
@@ -975,6 +967,7 @@ function switchTab(name) {
   });
   document.querySelectorAll('.tabbar-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   if (name === 'archiv') renderHistory();
+  if (name === 'nastavenia') naplnTechnikPolia();
   window.scrollTo(0, 0);
 }
 // Sidebar nahradený tab-barom — funkcie ponechané ako bezpečné no-op pre staré volania.
@@ -1030,6 +1023,7 @@ window.onload = () => {
   updateThemeButton(); // Nastaví ikonku ☀️/🌙 podľa uloženej témy
   const dlInput = document.getElementById('device-label-input');
   if (dlInput) dlInput.value = Store.getRaw('mpk_device_label', '');
+  naplnTechnikPolia();
 
   // Cloud sync: načítaj uložený token a nastav stavový indikátor (len Drive používateľ)
   nactajUlozenyToken();
@@ -2487,27 +2481,32 @@ function doPrint() {
 }
 
 
-// ===== PROFIL TECHNIKA =====
-function openProfile() {
-  document.getElementById('profile-technik-input').value = Store.getRaw('mpk_technik_profil', '');
-  document.getElementById('profile-modal').classList.add('open');
+// ===== TECHNIK (Nastavenia) =====
+// mpk_technik_profil ostáva jediným zdrojom (spojený reťazec) — backup, sync,
+// #technik aj PDF sa nemenia. Nastavenia ho len rozdelia do 2 polí a pri zmene
+// zložia späť cez čiarku (delenie podľa POSLEDNEJ čiarky — meno môže mať čiarku).
+function rozdelTechnika(spojeny) {
+  spojeny = (spojeny || '').trim();
+  const i = spojeny.lastIndexOf(',');
+  return i === -1
+    ? { meno: spojeny, cislo: '' }
+    : { meno: spojeny.slice(0, i).trim(), cislo: spojeny.slice(i + 1).trim() };
 }
-
-function closeProfile() {
-  document.getElementById('profile-modal').classList.remove('open');
+function naplnTechnikPolia() {
+  const t = rozdelTechnika(Store.getRaw('mpk_technik_profil', ''));
+  const m = document.getElementById('set-technik-meno');
+  const c = document.getElementById('set-technik-cislo');
+  if (m) m.value = t.meno;
+  if (c) c.value = t.cislo;
 }
-
-function saveProfile() {
-  const val = document.getElementById('profile-technik-input').value.trim();
-  Store.setRaw('mpk_technik_profil', val);
+function ulozTechnik() {
+  const meno = (document.getElementById('set-technik-meno').value || '').trim();
+  const cislo = (document.getElementById('set-technik-cislo').value || '').trim();
+  const spojeny = meno + (cislo ? ', ' + cislo : '');
+  Store.setRaw('mpk_technik_profil', spojeny);
   oznacZmeneny('profil');
-  closeProfile();
-  showToast('👤 Profil uložený', 'success');
-  
   const techInput = document.getElementById('technik');
-  if (techInput && !techInput.value) {
-    techInput.value = val;
-  }
+  if (techInput && !techInput.value) techInput.value = spojeny;
 }
 
 // ===== DATABÁZA ZARIADENÍ (Z HISTÓRIE) =====
