@@ -530,6 +530,16 @@ input[readonly], input:disabled, select:disabled {
   .btn-cloud-backup { width: 100%; padding: 11px; background: var(--accent-filled); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; }
   .btn-logout { color: #fca5a5; }
 
+  /* Výstraha „Cloud odpojený" — EasyCena vzhľad (červený okraj, žlté login tlačidlo) */
+  .drive-expired-box { border: 2px solid #dc2626 !important; }
+  .drive-expired-title { color: #ef4444; font-size: 18px; margin-bottom: 14px; }
+  .drive-expired-info { background: var(--bg-group); border-radius: 8px; padding: 12px 14px; font-size: 13px; color: var(--text-primary); line-height: 1.5; margin-bottom: 16px; }
+  .drive-expired-info b { color: #d97706; }
+  .drive-expired-login { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 13px; background: transparent; border: 2px solid #f59e0b; border-radius: 8px; color: var(--text-primary); font-size: 14px; font-weight: bold; cursor: pointer; margin-bottom: 10px; font-family: inherit; }
+  .drive-expired-login:hover { background: rgba(245, 158, 11, 0.1); }
+  .drive-expired-login-sub { font-size: 10px; font-weight: normal; color: var(--text-secondary); letter-spacing: 0.3px; text-align: center; }
+  .drive-expired-later { width: 100%; background: none; border: none; color: var(--text-secondary); font-size: 12px; font-weight: bold; cursor: pointer; padding: 6px; font-family: inherit; }
+
   .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500; display: flex; background: var(--bg-card); border-top: 1px solid var(--border-card); box-shadow: 0 -2px 12px rgba(0,0,0,0.25); padding-bottom: env(safe-area-inset-bottom); }
   .tabbar-btn { flex: 1; background: none; border: none; cursor: pointer; padding: 8px 4px 10px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 600; font-family: inherit; transition: color 0.15s; }
   .tabbar-ico { font-size: 21px; line-height: 1; }
@@ -727,17 +737,17 @@ input[readonly], input:disabled, select:disabled {
 
 <!-- VÝSTRAHA: CLOUD ODPOJENÝ -->
 <div class="modal-overlay" id="drive-expired-modal">
-  <div class="modal-box" style="max-width: 420px;">
-    <div class="modal-toolbar">
-      <h3>⚠️ Cloud záloha je odpojená</h3>
-    </div>
+  <div class="modal-box drive-expired-box" style="max-width: 440px;">
     <div class="modal-body">
-      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:14px;">
-        Prihlásenie do Google Disku vypršalo. Zmeny sa zatiaľ ukladajú len v tomto
-        zariadení a <b>nesynchronizujú sa</b>. Prihlás sa znova, nech je záloha aktuálna.
-      </p>
-      <button class="btn btn-success" style="width:100%; margin-bottom:8px;" onclick="cloudReconnect()">🔑 Prihlásiť sa</button>
-      <button class="btn btn-secondary" style="width:100%;" onclick="closeDriveExpired()">Neskôr</button>
+      <h3 class="drive-expired-title">⚠️ Cloud záloha je odpojená</h3>
+      <div class="drive-expired-info">
+        Prihlásenie do <b>Google Drive</b> vypršalo, takže <b>zálohy sa teraz nesynchronizujú</b>. Ak si na inom zariadení medzitým niečo zmenil, zmeny sa nestiahnu, kým sa znova neprihlásiš.
+      </div>
+      <button class="drive-expired-login" onclick="cloudReconnect()">
+        🔒 PRIHLÁSIŤ SA DO GOOGLE DRIVE
+        <span class="drive-expired-login-sub">OBNOVÍ PRIHLÁSENIE A STIAHNE NAJNOVŠIU ZÁLOHU.</span>
+      </button>
+      <button class="drive-expired-later" onclick="closeDriveExpired()">NESKÔR (PRIPOMENIE SA PRI ĎALŠOM OTVORENÍ)</button>
     </div>
   </div>
 </div>
