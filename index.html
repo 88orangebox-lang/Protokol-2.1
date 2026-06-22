@@ -512,10 +512,23 @@ input[readonly], input:disabled, select:disabled {
   #view-archiv .hi-date { color: var(--text-secondary); }
   #view-archiv .history-empty { color: var(--text-secondary); }
 
-  .settings-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 10px; padding: 14px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
-  .settings-card-title { font-size: 13px; font-weight: bold; color: var(--text-primary); margin-bottom: 2px; }
+  .settings-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+  .settings-card-head { width: 100%; background: none; border: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 14px; font-family: inherit; }
+  .sc-title { font-size: 13px; font-weight: bold; color: var(--text-primary); }
+  .sc-chevron { color: var(--text-secondary); transition: transform 0.2s; font-size: 14px; }
+  .settings-card.open .sc-chevron { transform: rotate(180deg); }
+  .settings-card-content { display: none; flex-direction: column; gap: 8px; padding: 0 14px 14px; }
+  .settings-card.open .settings-card-content { display: flex; }
   .settings-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
   .settings-input { width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 14px; border-radius: 6px; }
+  .cloud-status-line { font-size: 13px; }
+  .cloud-status-line.cloud-ok { color: var(--accent-filled); }
+  .cloud-status-line.cloud-warn { color: #d97706; }
+  .cloud-hint { font-size: 12px; color: var(--text-secondary); margin: 0; }
+  .cloud-last { font-size: 12px; color: var(--text-secondary); text-align: center; }
+  .btn-cloud-primary { width: 100%; padding: 11px; background: var(--accent); color: var(--text-on-accent); border: none; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; }
+  .btn-cloud-backup { width: 100%; padding: 11px; background: var(--accent-filled); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; }
+  .btn-logout { color: #fca5a5; }
 
   .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 500; display: flex; background: var(--bg-card); border-top: 1px solid var(--border-card); box-shadow: 0 -2px 12px rgba(0,0,0,0.25); padding-bottom: env(safe-area-inset-bottom); }
   .tabbar-btn { flex: 1; background: none; border: none; cursor: pointer; padding: 8px 4px 10px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 600; font-family: inherit; transition: color 0.15s; }
@@ -626,28 +639,48 @@ input[readonly], input:disabled, select:disabled {
 <section class="view" id="view-nastavenia" style="display:none;">
   <div class="view-inner">
     <h2 class="view-title">⚙️ Nastavenia</h2>
-    <div class="settings-card">
-      <div class="settings-card-title">👤 Technik</div>
-      <label class="settings-label">Meno a priezvisko</label>
-      <input type="text" id="set-technik-meno" class="settings-input" placeholder="Napr. Ing. Peter Mihajľ" oninput="ulozTechnik()" autocomplete="off">
-      <label class="settings-label">Číslo osvedčenia</label>
-      <input type="text" id="set-technik-cislo" class="settings-input" placeholder="Napr. 6292" oninput="ulozTechnik()" autocomplete="off">
+    <div class="settings-card open">
+      <button class="settings-card-head" onclick="toggleSettingsCard(this)">
+        <span class="sc-title">👤 Technik</span><span class="sc-chevron">▾</span>
+      </button>
+      <div class="settings-card-content">
+        <label class="settings-label">Meno a priezvisko</label>
+        <input type="text" id="set-technik-meno" class="settings-input" placeholder="Napr. Ing. Peter Mihajľ" oninput="ulozTechnik()" autocomplete="off">
+        <label class="settings-label">Číslo osvedčenia</label>
+        <input type="text" id="set-technik-cislo" class="settings-input" placeholder="Napr. 6292" oninput="ulozTechnik()" autocomplete="off">
+      </div>
     </div>
-    <div class="settings-card">
-      <div class="settings-card-title">☁️ Cloud záloha (Google Drive)</div>
-      <input type="text" id="device-label-input" class="device-label-input" placeholder="📱 Názov zariadenia (napr. Tablet)" oninput="ulozDeviceLabel(this.value)" autocomplete="off">
-      <button class="btn-backup" onclick="driveBackup()">☁️ Zálohovať na Google Disk</button>
-      <button class="btn-backup" onclick="openDriveList()">⬇️ Obnoviť z Google Disku</button>
+
+    <div class="settings-card open" id="cloud-card">
+      <button class="settings-card-head" onclick="toggleSettingsCard(this)">
+        <span class="sc-title">☁️ Cloud záloha (Google Drive)</span><span class="sc-chevron">▾</span>
+      </button>
+      <div class="settings-card-content" id="cloud-card-body"></div>
     </div>
+
     <div class="settings-card">
-      <div class="settings-card-title">💾 Lokálna záloha (JSON súbor)</div>
-      <button class="btn-backup" onclick="exportBackup()">📤 Exportovať zálohu</button>
-      <label class="btn-backup" style="text-align:center;cursor:pointer;display:block;">
-        📥 Importovať zálohu
-        <input type="file" accept=".json" id="import-file-input" style="display:none;" onchange="importBackup(this)">
-      </label>
+      <button class="settings-card-head" onclick="toggleSettingsCard(this)">
+        <span class="sc-title">💾 Lokálna záloha (JSON súbor)</span><span class="sc-chevron">▾</span>
+      </button>
+      <div class="settings-card-content">
+        <button class="btn-backup" onclick="exportBackup()">📤 Exportovať zálohu</button>
+        <label class="btn-backup" style="text-align:center;cursor:pointer;display:block;">
+          📥 Importovať zálohu
+          <input type="file" accept=".json" id="import-file-input" style="display:none;" onchange="importBackup(this)">
+        </label>
+      </div>
     </div>
-    <div id="storage-status" style="font-size:11px;padding:6px 8px;border-radius:5px;text-align:center;"></div>
+
+    <div class="settings-card">
+      <button class="settings-card-head" onclick="toggleSettingsCard(this)">
+        <span class="sc-title">🎨 Vzhľad aplikácie</span><span class="sc-chevron">▾</span>
+      </button>
+      <div class="settings-card-content">
+        <button class="btn-backup" onclick="toggleTheme()">🌙 / ☀️ Prepnúť tmavý / svetlý režim</button>
+      </div>
+    </div>
+
+    <div id="storage-status" style="font-size:11px;padding:6px 8px;border-radius:5px;text-align:center;margin-top:4px;"></div>
   </div>
 </section>
 
@@ -967,7 +1000,7 @@ function switchTab(name) {
   });
   document.querySelectorAll('.tabbar-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   if (name === 'archiv') renderHistory();
-  if (name === 'nastavenia') naplnTechnikPolia();
+  if (name === 'nastavenia') { naplnTechnikPolia(); renderCloudCard(); }
   window.scrollTo(0, 0);
 }
 // Sidebar nahradený tab-barom — funkcie ponechané ako bezpečné no-op pre staré volania.
@@ -1028,6 +1061,7 @@ window.onload = () => {
   // Cloud sync: načítaj uložený token a nastav stavový indikátor (len Drive používateľ)
   nactajUlozenyToken();
   if (jeDrivePouzivatel()) setCloudStatus(_maPlatnyToken() ? 'ok' : 'expired');
+  renderCloudCard();
 
   renderHistory(); // Najprv vykreslíme bočný panel s históriou
 
@@ -1810,10 +1844,12 @@ async function cloudReconnect() {
     await ensureDriveToken();
     setCloudStatus('ok');
     showToast('☁️ Cloud znova pripojený', 'success');
+    renderCloudCard();
     _synchronizuj(); // pull-on-open po obnove
   } catch(e) {
     setCloudStatus('expired');
     showToast('❌ Prihlásenie zlyhalo', 'error');
+    renderCloudCard();
   }
 }
 
@@ -1958,9 +1994,11 @@ async function driveBackup() {
     setLastSync(Date.now());
     setCloudStatus('ok');
     showToast('☁️ Záloha vytvorená (' + count + ' protokolov)', 'success');
+    renderCloudCard();
   } catch(e) {
     setCloudStatus('error');
     showToast('❌ Záloha zlyhala: ' + (e.message || e), 'error');
+    renderCloudCard();
   }
 }
 
@@ -1982,6 +2020,7 @@ function softReload() {
       Store.set('mpk_draft', Object.assign({}, p, { currentId: currentId }));
     }
   }
+  if (typeof renderCloudCard === 'function') renderCloudCard();
 }
 
 // Stiahne najnovšiu cloud zálohu (alebo null)
@@ -2507,6 +2546,55 @@ function ulozTechnik() {
   oznacZmeneny('profil');
   const techInput = document.getElementById('technik');
   if (techInput && !techInput.value) techInput.value = spojeny;
+}
+
+// ===== NASTAVENIA: rozbaľovacie karty + Cloud karta =====
+function toggleSettingsCard(headEl) {
+  if (headEl && headEl.parentElement) headEl.parentElement.classList.toggle('open');
+}
+function formatDateTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+// Vykreslí obsah Cloud karty podľa stavu (odhlásený / prihlásený / vypršaný).
+function renderCloudCard() {
+  const body = document.getElementById('cloud-card-body');
+  if (!body) return;
+  const platny = _maPlatnyToken();
+  const email = Store.getRaw('mpk_drive_email', '');
+  const last = Store.getRaw('mpk_drive_last', '');
+
+  if (!jeDrivePouzivatel()) {
+    body.innerHTML =
+      '<p class="cloud-hint">Zálohy sa ukladajú na tvoj Google Disk a synchronizujú medzi zariadeniami.</p>' +
+      '<button class="btn-cloud-primary" onclick="cloudReconnect()">🔑 Prihlásiť sa do Google Drive</button>';
+    return;
+  }
+  let html = platny
+    ? '<div class="cloud-status-line cloud-ok">✅ Prihlásený · <b>' + escapeHtml(email) + '</b></div>'
+    : '<div class="cloud-status-line cloud-warn">⚠️ Prihlásenie vypršalo · <b>' + escapeHtml(email) + '</b></div>' +
+      '<button class="btn-cloud-primary" onclick="cloudReconnect()">🔑 Prihlásiť sa znova</button>';
+  html += '<label class="settings-label">Názov tohto zariadenia</label>' +
+          '<input type="text" id="device-label-input" class="device-label-input" placeholder="📱 napr. Mobil / Tablet" oninput="ulozDeviceLabel(this.value)" autocomplete="off">';
+  if (platny) html += '<button class="btn-cloud-backup" onclick="driveBackup()">☁️⬆️ Zálohovať teraz</button>';
+  html += '<div class="cloud-last">Posledná záloha: ' + (last ? formatDateTime(last) : '—') + '</div>' +
+          '<button class="btn-backup" onclick="openDriveList()">⬇️ Obnoviť zo zálohy…</button>' +
+          '<button class="btn-backup btn-logout" onclick="cloudLogout()">Odhlásiť sa</button>';
+  body.innerHTML = html;
+  const dl = document.getElementById('device-label-input');
+  if (dl) dl.value = Store.getRaw('mpk_device_label', '');
+}
+// Vedomé odhlásenie — maže token aj email (email LEN tu!) a prepne na odhlásený stav.
+function cloudLogout() {
+  if (!confirm('Odhlásiť sa z Google Drive na tomto zariadení?\n\nLokálne dáta ostávajú, len sa prestanú synchronizovať.')) return;
+  _driveToken = null; _driveTokenExpiry = 0;
+  Store.set('mpk_drive_token', null);
+  Store.setRaw('mpk_drive_email', '');
+  setCloudStatus('logged-out');
+  renderCloudCard();
+  showToast('👋 Odhlásený z Google Drive');
 }
 
 // ===== DATABÁZA ZARIADENÍ (Z HISTÓRIE) =====
