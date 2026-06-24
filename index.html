@@ -683,6 +683,7 @@ input[readonly], input:disabled, select:disabled {
     </div>
 
     <div id="storage-status" style="font-size:11px;padding:6px 8px;border-radius:5px;text-align:center;margin-top:4px;"></div>
+    <button class="btn btn-success" id="btn-save-settings" style="width:100%;margin-top:12px;padding:12px;font-size:14px;" onclick="ulozNastavenia()">💾 Uložiť zmeny</button>
   </div>
 </section>
 
@@ -2614,6 +2615,21 @@ function resetPdfTemplate() {
   Store.setRaw('mpk_pdf_template', DEFAULT_PDF_TEMPLATE);
   naplnPdfTemplatePole();
   showToast('↺ Predvolená šablóna obnovená');
+}
+// Polia v Nastaveniach sa ukladajú priebežne (pri písaní), toto tlačidlo dáva
+// istotu + spätnú väzbu, že je všetko zapísané.
+function ulozNastavenia() {
+  ulozTechnik();
+  ulozPdfTemplate();
+  const dl = document.getElementById('device-label-input');
+  if (dl) ulozDeviceLabel(dl.value);
+  const btn = document.getElementById('btn-save-settings');
+  if (btn) {
+    const orig = btn.textContent;
+    btn.textContent = '✅ Uložené';
+    setTimeout(() => { btn.textContent = orig; }, 1400);
+  }
+  showToast('✅ Nastavenia uložené', 'success');
 }
 // Zostaví navrhovaný názov PDF súboru z dát protokolu a šablóny.
 // {okruhy} = čísla okruhov všetkých klím spojené pomlčkou (viac klím → 0001-0002).
