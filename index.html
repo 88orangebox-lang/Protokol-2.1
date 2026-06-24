@@ -1664,6 +1664,7 @@ function vytvorDataZalohy() {
     counter_pov: Store.getRaw('mpk_last_okruh_pov', '0'),
     counter_bez: Store.getRaw('mpk_last_okruh_bez', '1000'),
     technik_profil: Store.getRaw('mpk_technik_profil', ''),
+    pdf_template: Store.getRaw('mpk_pdf_template', DEFAULT_PDF_TEMPLATE),
     protocols: protocols,
     _meta: {
       modifiedAt: meta.modifiedAt || {},
@@ -1693,6 +1694,8 @@ function _aplikujZalohu(data) {
   if (data.counter_bez != null) Store.setRaw('mpk_last_okruh_bez', data.counter_bez);
   // Profil prepíšeme len ak ho záloha obsahuje (staré zálohy ho nemajú → nemažeme)
   if (typeof data.technik_profil === 'string') Store.setRaw('mpk_technik_profil', data.technik_profil);
+  // PDF šablóna — rovnako: prepíš len ak ju záloha obsahuje (staré zálohy ju nemajú)
+  if (typeof data.pdf_template === 'string') Store.setRaw('mpk_pdf_template', data.pdf_template);
 
   // Prevezmi _meta.modifiedAt do mpk_meta (pri starej zálohe odvoď z exportedAt)
   const m = nactajMeta();
@@ -2276,6 +2279,11 @@ function _zlucZalohy(localData, cloudData) {
     ? (typeof cloudData.technik_profil === 'string' ? cloudData.technik_profil : (localData.technik_profil || ''))
     : (typeof localData.technik_profil === 'string' ? localData.technik_profil : (cloudData.technik_profil || ''));
 
+  // PDF šablóna — novšia podľa meta.pdf_template vyhráva (ako profil)
+  const pdfTpl = ((cm.pdf_template || 0) > (lm.pdf_template || 0))
+    ? (typeof cloudData.pdf_template === 'string' ? cloudData.pdf_template : localData.pdf_template)
+    : (typeof localData.pdf_template === 'string' ? localData.pdf_template : cloudData.pdf_template);
+
   const mm = {};
   Object.keys(lm).concat(Object.keys(cm)).forEach(k => { mm[k] = Math.max(lm[k] || 0, cm[k] || 0); });
 
@@ -2285,6 +2293,7 @@ function _zlucZalohy(localData, cloudData) {
     counter_pov: maxCounter(localData.counter_pov, cloudData.counter_pov, 0),
     counter_bez: maxCounter(localData.counter_bez, cloudData.counter_bez, 1000),
     technik_profil: profil,
+    pdf_template: pdfTpl,
     protocols: merged,
     _meta: { modifiedAt: mm, deviceLabel: Store.getRaw('mpk_device_label', ''), exportedAt: Date.now(), schemaVersion: 1 }
   };
@@ -2609,10 +2618,11 @@ function naplnPdfTemplatePole() {
 }
 function ulozPdfTemplate() {
   const el = document.getElementById('set-pdf-template');
-  if (el) Store.setRaw('mpk_pdf_template', el.value);
+  if (el) { Store.setRaw('mpk_pdf_template', el.value); oznacZmeneny('pdf_template'); }
 }
 function resetPdfTemplate() {
   Store.setRaw('mpk_pdf_template', DEFAULT_PDF_TEMPLATE);
+  oznacZmeneny('pdf_template');
   naplnPdfTemplatePole();
   showToast('↺ Predvolená šablóna obnovená');
 }
