@@ -1102,6 +1102,7 @@ window.onload = () => {
   // Prednačítaj Google prihlásenie (ak online) — aby OAuth popup fungoval hneď
   // na prvý klik bez blokovania prehliadačom. Offline ticho zlyhá (netreba).
   if (navigator.onLine && typeof loadGis === 'function') { loadGis().catch(() => {}); }
+  updateDocTitle();
 };
 
 
@@ -1475,6 +1476,7 @@ function loadKlimaData(gid, data) {
     if (lbl) lbl.textContent = data.okruhType === 'povinnost' ? '(S povinnosťou)' : '(Bez povinnosti)';
     updateOkruhBadge(gid);
   }
+  updateDocTitle();
 }
 
 // ===== SAVE / NEW / DELETE =====
@@ -1617,6 +1619,7 @@ function newProtocol() {
   addKlimaGroup();
   document.getElementById('btn-delete').style.display = 'none';
   renderHistory();
+  updateDocTitle();
   showToast('📝 Nový protokol');
 }
 function deleteProtocol() {
@@ -2496,6 +2499,7 @@ function previewProtocol() {
   document.getElementById('proto-modal-content').innerHTML = html;
   document.getElementById('proto-print-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.add('open');
+  updateDocTitle(); // názov PDF nastav už pri otvorení náhľadu (skôr než print)
 }
 function closeModal() { document.getElementById('modal-overlay').classList.remove('open'); }
 function doPrint() {
@@ -2629,6 +2633,15 @@ function pdfNazov(data) {
   // Odstráň znaky nepovolené v názve súboru (medzery/pomlčky/bodky nechaj).
   s = s.replace(/[\\/:*?"<>|]+/g, '').replace(/\s{2,}/g, ' ').trim();
   return s || 'Protokol';
+}
+// Drží document.title = navrhovaný názov PDF, nastavený SKÔR než tlač.
+// Niektoré Android tlačové služby v nainštalovanej PWA ignorujú zmenu titulu
+// tesne pred window.print() — preto ho nastavujeme priebežne (náhľad/load/štart).
+function updateDocTitle() {
+  try {
+    const data = collectData();
+    document.title = jePrazdnyFormular(data) ? 'MP Komfort – Protokol o spustení' : pdfNazov(data);
+  } catch (e) { /* titul je len kozmetika — chybu ignoruj */ }
 }
 
 // ===== DATABÁZA ZARIADENÍ (Z HISTÓRIE) =====
