@@ -1,6 +1,6 @@
 {
   "name": "Protokol o spustení klimatizácie",
-  "short_name": "Protokol 2.0",
+  "short_name": "Protokol 2.1",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#1a2332",
